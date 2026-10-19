@@ -4,9 +4,10 @@ import { useEffect, useState } from "react";
 import { PageHeader, Field, Modal, EmptyState } from "@/components/ui";
 import { getJSON, sendJSON } from "@/lib/api";
 import { CatalogModel, CognitoGroup, InferenceProvider, Persona } from "@/lib/types";
+import { GovernanceTab } from "@/components/GovernanceTab";
 
 export default function SettingsPage() {
-  const [tab, setTab] = useState<"models" | "personas">("models");
+  const [tab, setTab] = useState<"models" | "personas" | "governance">("models");
   const [models, setModels] = useState<CatalogModel[]>([]);
   const [personas, setPersonas] = useState<Persona[]>([]);
   const [groups, setGroups] = useState<CognitoGroup[]>([]);
@@ -60,7 +61,7 @@ export default function SettingsPage() {
       <div className="flex gap-8 px-8 pb-10">
         <div className="w-48 shrink-0">
           <div className="card space-y-1 p-2">
-            {(["models", "personas"] as const).map((t) => (
+            {(["models", "personas", "governance"] as const).map((t) => (
               <button
                 key={t}
                 onClick={() => setTab(t)}
@@ -70,7 +71,11 @@ export default function SettingsPage() {
                     : "text-slate-600 hover:bg-slate-50"
                 }`}
               >
-                {t === "models" ? "⚙ Models" : "👥 Personas"}
+                {t === "models"
+                  ? "⚙ Models"
+                  : t === "personas"
+                  ? "👥 Personas"
+                  : "◐ Governance"}
               </button>
             ))}
           </div>
@@ -195,6 +200,8 @@ export default function SettingsPage() {
               </div>
             </div>
           )}
+
+          {tab === "governance" && <GovernanceTab />}
         </div>
       </div>
 

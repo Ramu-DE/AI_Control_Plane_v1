@@ -11,6 +11,7 @@ import {
   AuditEvent,
   CatalogModel,
   CognitoGroup,
+  InferenceTarget,
   LibraryPolicy,
   ModelProvider,
   ModelRoute,
@@ -18,6 +19,7 @@ import {
   Policy,
   PolicyEngine,
   PolicyStore,
+  RateLimit,
   Registry,
   RegistryRecord,
   Tenant,
@@ -32,6 +34,8 @@ export interface Store {
   registries: Registry[];
   records: RegistryRecord[];
   models: CatalogModel[];
+  inferenceTargets: InferenceTarget[];
+  rateLimits: RateLimit[];
   agents: AgentConfig[];
   policies: Policy[];
   personas: Persona[];
@@ -295,7 +299,58 @@ function seed(): Store {
         inferenceProvider: "Amazon Bedrock",
         createdAt: iso(3),
       },
+      {
+        id: "model-gpt-oss-120b",
+        name: "GPT-OSS 120B",
+        modelProvider: "Custom: OpenAI",
+        modelId: "bedrock-mantle/openai.gpt-oss-120b",
+        inferenceProvider: "AgentCore Gateway",
+        targetName: "bedrock-mantle",
+        gatewayBaseUrl:
+          "https://llm-gateway-abc123.gateway.bedrock-agentcore.us-east-1.amazonaws.com/inference/v1",
+        inferenceApi: "Responses API (/v1/responses)",
+        createdAt: iso(1),
+      },
+      {
+        id: "model-gpt-oss-20b",
+        name: "GPT-OSS 20B",
+        modelProvider: "Custom: OpenAI",
+        modelId: "fast-tier/openai.gpt-oss-20b",
+        inferenceProvider: "AgentCore Gateway",
+        targetName: "fast-tier",
+        gatewayBaseUrl:
+          "https://llm-gateway-abc123.gateway.bedrock-agentcore.us-east-1.amazonaws.com/inference/v1",
+        inferenceApi: "Responses API (/v1/responses)",
+        createdAt: iso(1),
+      },
     ],
+    inferenceTargets: [
+      {
+        id: "target-bedrock-mantle",
+        name: "bedrock-mantle",
+        description: "Pre-deployed broad connector — every model Bedrock Mantle serves.",
+        status: "READY",
+        source: "Connector",
+        connector: "Bedrock Mantle",
+        passthrough: false,
+        outboundAuth: "IAM Role",
+        createdAt: iso(3),
+      },
+      {
+        id: "target-fast-tier",
+        name: "fast-tier",
+        description: "Low-cost tier, allowlisted to one model",
+        status: "READY",
+        source: "Custom",
+        endpoint: "https://bedrock-mantle.us-east-1.api.aws",
+        apiPath: "/v1/responses",
+        models: ["openai.gpt-oss-20b"],
+        passthrough: false,
+        outboundAuth: "IAM Role",
+        createdAt: iso(1),
+      },
+    ],
+    rateLimits: [],
     agents: [
       {
         id: "agent-expense-assistant",

@@ -193,20 +193,100 @@ export interface AgentConfig {
 
 // The platform model catalog (Settings → Models). Admins curate; agent
 // developers consume. Distinct from the Part 5 LLM-gateway routes/providers.
-export type InferenceProvider = "Amazon Bedrock" | "Anthropic" | "OpenAI";
+export type InferenceProvider = "Amazon Bedrock" | "Anthropic" | "OpenAI" | "AgentCore Gateway";
+
+export type InferenceApi = "Responses API (/v1/responses)" | "Chat Completions (/v1/chat/completions)";
 
 export interface CatalogModel {
   id: ID;
   // Friendly catalog name, e.g. "Claude Opus 4.6".
   name: string;
-  // Model vendor, e.g. "Anthropic".
+  // Model vendor, e.g. "Anthropic" / "Custom: OpenAI".
   modelProvider: string;
-  // Upstream model id, e.g. "global.anthropic.claude-opus-4-6-v1:0".
+  // Upstream / routed model id. For gateway models this is the
+  // target-qualified id, e.g. "bedrock-mantle/openai.gpt-oss-120b".
   modelId: string;
-  // Where inference is served, e.g. "Amazon Bedrock".
+  // Where inference is served.
   inferenceProvider: InferenceProvider;
+  // --- Part 5: gateway-routed model fields (only when inferenceProvider === "AgentCore Gateway") ---
+  // The inference target this model routes to (derived from the modelId prefix).
+  targetName?: string;
+  // The LLM gateway's /inference/v1 base URL.
+  gatewayBaseUrl?: string;
+  // Which inference API the target accepts.
+  inferenceApi?: InferenceApi;
   createdAt: string;
 }
+
+// ---------- Part 5: Model Governance (LLM gateway) ----------
+// An inference target is a model provider the LLM gateway routes to.
+export type TargetSource = "Connector" | "Custom";
+export type TargetStatus = "READY" | "CREATING" | "FAILED";
+export type OutboundAuth = "IAM Role" | "API key" | "OAuth";
+
+export interface InferenceTarget {
+  id: ID;
+  name: string; // e.g. "bedrock-mantle", "fast-tier"
+  description: string;
+  status: TargetStatus;
+  source: TargetSource;
+  // Connector name when source=Connector (e.g. "Bedrock Mantle").
+  connector?: string;
+  // Custom target config.
+  endpoint?: string; // e.g. https://bedrock-mantle.us-east-1.api.aws
+  apiPath?: string; // e.g. /v1/responses
+  models?: string[]; // allowlist, e.g. ["openai.gpt-oss-20b"]
+  passthrough: boolean;
+  outboundAuth: OutboundAuth;
+  createdAt: string;
+}
+
+// Rate limits: dimensions (ordered) + entries (per-dimension values + metrics).
+export type DimensionType =
+  | "Target"
+  | "Tool"
+  | "Model"
+  | "OAuth Claim"
+  | "IAM Principal ARN"
+  | "IAM source Identity";
+
+export type MetricPeriod = "Second" | "Minute";
+
+export interface RateLimitDimension {
+  type: DimensionType;
+  // For OAuth Claim, the claim key (e.g. "sub").
+  oauthKey?: string;
+}
+
+// A per-dimension condition value in an entry: either a specific value or the
+// per- wildcard (All).
+export interface EntryCondition {
+  // undefined = wildcard (All).
+  value?: string;
+}
+
+export interface RateLimitEntry {
+  id: ID;
+  // One condition per dimension (ordered to match the limit's dimensions).
+  conditions: EntryCondition[];
+  // Metrics (null = not set). Request applies to all; Token = inference only
+  // (per-minute); Connection per-second.
+  requestRate: number | null;
+  requestPeriod: MetricPeriod;
+  tokenRate: number | null; // per minute
+  connectionRate: number | null; // per second
+}
+
+export interface RateLimit {
+  id: ID;
+  name: string;
+  description: string;
+  dimensions: RateLimitDimension[];
+  entries: RateLimitEntry[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 
 // ---------- Part 3: Policies (Cedar, two layers) ----------
 // Layer 1: AgentCore Policy at the gateway (perimeter / MCP boundary).
