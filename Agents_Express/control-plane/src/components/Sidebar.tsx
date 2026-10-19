@@ -48,6 +48,7 @@ const GROUPS: NavGroup[] = [
     items: [
       { href: "/", label: "Dashboard", icon: "dashboard" },
       { href: "/agents", label: "Agents", icon: "agents" },
+      { href: "/approvals", label: "Approval Inbox", icon: "policy" },
     ],
   },
   {
@@ -68,7 +69,10 @@ const GROUPS: NavGroup[] = [
   },
   {
     title: "Platform",
-    items: [{ href: "/settings", label: "Settings", icon: "settings" }],
+    items: [
+      { href: "/tenants", label: "Tenants", icon: "agents" },
+      { href: "/settings", label: "Settings", icon: "settings" },
+    ],
   },
 ];
 

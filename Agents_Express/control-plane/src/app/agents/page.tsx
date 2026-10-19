@@ -16,6 +16,7 @@ import {
   AgentVisibility,
   CatalogModel,
   RegistryRecord,
+  Tenant,
 } from "@/lib/types";
 
 type SubTab = "general" | "model" | "prompt" | "tools" | "compute";
@@ -24,18 +25,21 @@ export default function AgentsPage() {
   const [agents, setAgents] = useState<AgentConfig[]>([]);
   const [models, setModels] = useState<CatalogModel[]>([]);
   const [approved, setApproved] = useState<RegistryRecord[]>([]);
+  const [tenants, setTenants] = useState<(Tenant & { config: { maxAgents: number } })[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
 
   async function load() {
-    const [a, m, r] = await Promise.all([
+    const [a, m, r, t] = await Promise.all([
       getJSON<AgentConfig[]>("/api/agents"),
       getJSON<CatalogModel[]>("/api/catalog"),
       getJSON<{ records: RegistryRecord[] }>("/api/registry"),
+      getJSON<{ tenants: (Tenant & { config: { maxAgents: number } })[] }>("/api/tenants"),
     ]);
     setAgents(a);
     setModels(m);
     setApproved(r.records.filter((x) => x.status === "Approved"));
+    setTenants(t.tenants);
   }
   useEffect(() => {
     load();
@@ -49,6 +53,7 @@ export default function AgentsPage() {
         agent={agent}
         models={models}
         approved={approved}
+        tenants={tenants}
         onBack={() => setSelected(null)}
       />
     );
@@ -99,6 +104,7 @@ export default function AgentsPage() {
         <CreateAgentModal
           models={models}
           approved={approved}
+          tenants={tenants}
           onClose={() => setShowCreate(false)}
           onCreated={async () => {
             setShowCreate(false);
@@ -114,17 +120,20 @@ export default function AgentsPage() {
 function CreateAgentModal({
   models,
   approved,
+  tenants,
   onClose,
   onCreated,
 }: {
   models: CatalogModel[];
   approved: RegistryRecord[];
+  tenants: (Tenant & { config: { maxAgents: number } })[];
   onClose: () => void;
   onCreated: () => void;
 }) {
   const [form, setForm] = useState({
     name: "",
     description: "",
+    tenantId: tenants[0]?.id ?? "",
     modelId: models[0]?.id ?? "",
     systemPrompt: "",
     toolRefs: [] as string[],
@@ -184,6 +193,19 @@ function CreateAgentModal({
             onChange={(e) => setForm({ ...form, name: e.target.value })}
             placeholder="Expense Assistant"
           />
+        </Field>
+        <Field label="Tenant / Business Unit" required>
+          <select
+            className="input"
+            value={form.tenantId}
+            onChange={(e) => setForm({ ...form, tenantId: e.target.value })}
+          >
+            {tenants.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.tenantName} ({t.tier} · max {t.config.maxAgents} agents)
+              </option>
+            ))}
+          </select>
         </Field>
         <Field label="Description">
           <input
@@ -263,15 +285,18 @@ function AgentDetail({
   agent,
   models,
   approved,
+  tenants,
   onBack,
 }: {
   agent: AgentConfig;
   models: CatalogModel[];
   approved: RegistryRecord[];
+  tenants: (Tenant & { config: { maxAgents: number } })[];
   onBack: () => void;
 }) {
   const [tab, setTab] = useState<SubTab>("general");
   const model = models.find((m) => m.id === agent.modelId);
+  const tenant = tenants.find((t) => t.id === agent.tenantId);
   const tools = agent.toolRefs
     .map((id) => approved.find((r) => r.id === id))
     .filter(Boolean) as RegistryRecord[];
@@ -326,6 +351,7 @@ function AgentDetail({
               <h2 className="text-base font-semibold">General</h2>
               <div className="mt-4 space-y-5">
                 <Detail k="Name" v={agent.name} />
+                <Detail k="Tenant / BU" v={tenant?.tenantName ?? agent.tenantId} />
                 <Detail k="Description" v={agent.description || "—"} />
                 <Detail k="Status" v={<Pill status={agent.status} />} />
                 <div>

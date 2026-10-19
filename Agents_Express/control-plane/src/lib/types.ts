@@ -9,6 +9,43 @@
 
 export type ID = string;
 
+// ---------- SaaS multi-tenancy (replicated from saas-gaming-app/saas-workloads) ----------
+// Tenant tiers drive feature gating and isolation strategy.
+export type TenantTier = "basic" | "pro";
+
+// Isolation strategy per tier (pool = shared infra, silo = dedicated).
+export type IsolationModel = "pool" | "silo";
+
+// Per-tier feature flags + limits (mirrors tierMiddleware.getTierConfig).
+export interface TierConfig {
+  maxAgents: number;
+  maxToolsPerAgent: number;
+  monthlyTokenBudget: number | null; // null = unlimited
+  enableAnalytics: boolean;
+  enableAuditExport: boolean;
+  enableCustomPolicies: boolean;
+  enableDedicatedGateway: boolean;
+  maxModelsInCatalog: number;
+}
+
+// Node type in the org hierarchy.
+export type TenantNodeType = "org" | "bu" | "function" | "subunit";
+
+export interface Tenant {
+  id: ID;
+  tenantId: string; // slug, e.g. "takeda-rnd-001"
+  tenantName: string; // display, e.g. "Takeda R&D"
+  // Hierarchy: null for the root org; otherwise the parent tenant id.
+  parentId: ID | null;
+  type: TenantNodeType;
+  tier: TenantTier;
+  isolation: IsolationModel;
+  // Data-plane routing hint (pool = shared resource, silo = dedicated).
+  resourcePool: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 // ---------- Part 1: AWS Agent Registry ----------
 // Mirrors the real workshop model:
 //  - Registries are top-level CONTAINERS (catalogs) created in an account.
@@ -86,6 +123,8 @@ export interface AgentConfig {
   id: ID;
   name: string;
   description: string;
+  // Owning tenant (BU) — scopes the agent and drives tier-limit enforcement.
+  tenantId: ID;
   // References a CatalogModel (Settings → Models catalog).
   modelId: ID;
   systemPrompt: string;

@@ -20,9 +20,13 @@ import {
   PolicyStore,
   Registry,
   RegistryRecord,
+  Tenant,
+  TenantNodeType,
+  TenantTier,
 } from "./types";
 
 export interface Store {
+  tenants: Tenant[];
   registries: Registry[];
   records: RegistryRecord[];
   models: CatalogModel[];
@@ -44,8 +48,86 @@ function iso(daysAgo = 0): string {
   return d.toISOString();
 }
 
+// Builds the real Takeda organizational hierarchy as a tenant tree.
+// Root org → Business Units + Functions → sub-units. Tier/isolation reflect
+// sensitivity: regulated/clinical BUs lean Pro/silo; shared functions Basic/pool.
+function takedaOrgTree(): Tenant[] {
+  const out: Tenant[] = [];
+  const mk = (
+    id: string,
+    tenantName: string,
+    type: TenantNodeType,
+    parentId: string | null,
+    tier: TenantTier
+  ): void => {
+    out.push({
+      id,
+      tenantId: id,
+      tenantName,
+      parentId,
+      type,
+      tier,
+      isolation: tier === "pro" ? "silo" : "pool",
+      resourcePool: tier === "pro" ? `dedicated-${id}` : "shared-pool-01",
+      createdAt: iso(6),
+      updatedAt: iso(1),
+    });
+  };
+
+  // Root
+  mk("takeda", "Takeda", "org", null, "pro");
+
+  // ---- Business Units ----
+  mk("bu-us", "U.S. Business Unit", "bu", "takeda", "pro");
+  mk("bu-us-hr", "U.S. Human Resources", "subunit", "bu-us", "basic");
+
+  mk("bu-intl", "International Business Unit", "bu", "takeda", "pro");
+
+  mk("bu-japan", "Japan Pharma Business Unit", "bu", "takeda", "pro");
+  mk("bu-japan-hr", "Human Resources", "subunit", "bu-japan", "basic");
+  mk("bu-japan-ddt", "DD&T", "subunit", "bu-japan", "pro");
+
+  mk("bu-oncology", "Oncology Business Unit", "bu", "takeda", "pro");
+  mk("bu-onc-us", "US Oncology BU", "subunit", "bu-oncology", "pro");
+  mk("bu-onc-eucan", "EUCAN Oncology BU", "subunit", "bu-oncology", "pro");
+  mk("bu-onc-japan", "Japan Oncology BU", "subunit", "bu-oncology", "pro");
+
+  mk("bu-plasma", "Plasma-Derived Therapies Business Unit", "bu", "takeda", "pro");
+  mk("bu-plasma-biolife", "BioLife", "subunit", "bu-plasma", "pro");
+  mk("bu-plasma-opu", "Plasma OpU", "subunit", "bu-plasma", "basic");
+
+  // ---- Global Functions ----
+  mk("fn-rnd", "Research & Development", "function", "takeda", "pro");
+  mk("fn-rnd-research", "Research", "subunit", "fn-rnd", "pro");
+  mk("fn-rnd-spd", "Strategy & Portfolio Development", "subunit", "fn-rnd", "basic");
+
+  mk("fn-medical", "Global Medical", "function", "takeda", "pro");
+  mk("fn-supply", "Global Supply & Quality", "function", "takeda", "pro");
+
+  mk("fn-ddt", "Data, Digital & Technology", "function", "takeda", "pro");
+  mk("fn-ddt-bf", "DD&T Business Facing & Partners", "subunit", "fn-ddt", "pro");
+
+  mk("fn-finance", "Global Finance", "function", "takeda", "basic");
+  mk("fn-procurement", "Global Procurement", "subunit", "fn-finance", "basic");
+  mk("fn-realestate", "Global Real Estate and Facilities", "subunit", "fn-finance", "basic");
+
+  mk("fn-hr", "Global Human Resources", "function", "takeda", "basic");
+  mk("fn-hr-support", "mySupportHub", "subunit", "fn-hr", "basic");
+  mk("fn-hr-rewards", "Total Rewards: Pay & Benefits", "subunit", "fn-hr", "basic");
+
+  mk("fn-legal", "Global Legal, Ethics & Compliance", "function", "takeda", "pro");
+  mk("fn-comms", "Global Communications & Governance", "function", "takeda", "basic");
+  mk("fn-comms-communications", "Global Communications", "subunit", "fn-comms", "basic");
+  mk("fn-comms-governance", "Governance", "subunit", "fn-comms", "basic");
+
+  mk("fn-transformation", "Transformation Office", "function", "takeda", "basic");
+
+  return out;
+}
+
 function seed(): Store {
   return {
+    tenants: takedaOrgTree(),
     registries: [
       {
         id: "registry-anycompany",
@@ -171,6 +253,7 @@ function seed(): Store {
         id: "agent-expense-assistant",
         name: "Expense Assistant",
         description: "AnyCompany internal expense assistant",
+        tenantId: "fn-finance",
         modelId: "model-claude-opus-46",
         systemPrompt:
           "You are the AnyCompany Expense Assistant. Help employees submit, list, approve, and reject expense reports using the available tools. \n\nIf a tool returns a \"forbidden\" or denial response, explain plainly that the caller does not have permission.",
@@ -632,17 +715,25 @@ when {
         id: "evt-2",
         category: "agent",
         action: "create",
-        actor: "alice@example.com",
+        actor: "admin@workshop.local",
         detail: "Created agent 'Expense Assistant'",
         at: iso(3),
       },
       {
         id: "evt-3",
         category: "policy",
-        action: "enable",
-        actor: "alice@example.com",
-        detail: "Enabled gateway policy 'forbid self-approval'",
-        at: iso(2),
+        action: "publish",
+        actor: "Workshop Admin",
+        detail: "Published policy 'expense_ic' (v2) to anycompany_policy_engine",
+        at: iso(1),
+      },
+      {
+        id: "evt-4",
+        category: "policy",
+        action: "gateway-attach",
+        actor: "Workshop Admin",
+        detail: "Attached agent-platform-gateway (Enforce) to anycompany_policy_engine",
+        at: iso(0),
       },
     ],
   };

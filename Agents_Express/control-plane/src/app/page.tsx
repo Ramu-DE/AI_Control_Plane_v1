@@ -31,6 +31,33 @@ export default function DashboardPage() {
   const gatewayPolicies = store.policies.filter((p) => p.layer === "gateway").length;
   const avpPolicies = store.policies.filter((p) => p.layer === "avp").length;
 
+  // Governance signals (surfaced for the Platform Admin persona).
+  const pendingApprovals =
+    store.records.filter(
+      (r) => r.status === "Draft" || r.status === "Pending approval"
+    ).length +
+    store.libraryPolicies.filter(
+      (p) => p.status === "Draft" || p.status === "In Review"
+    ).length;
+  const unsyncedPolicies = store.policyEngines.reduce(
+    (n, e) => n + e.importedPolicies.filter((p) => !p.synced).length,
+    0
+  );
+  const tenantCount = store.tenants.length;
+  const proTenants = store.tenants.filter((t) => t.tier === "pro").length;
+
+  const signals: {
+    label: string;
+    value: number;
+    href: string;
+    tone: "warn" | "ok";
+  }[] = [
+    { label: "Pending approvals", value: pendingApprovals, href: "/approvals", tone: pendingApprovals > 0 ? "warn" : "ok" },
+    { label: "Unsynced policies", value: unsyncedPolicies, href: "/policy-engines", tone: unsyncedPolicies > 0 ? "warn" : "ok" },
+    { label: "Tenants (BUs)", value: tenantCount, href: "/tenants", tone: "ok" },
+    { label: "Pro / siloed tenants", value: proTenants, href: "/tenants", tone: "ok" },
+  ];
+
   return (
     <>
       <PageHeader
@@ -38,6 +65,28 @@ export default function DashboardPage() {
         subtitle="Build and govern AI agents as digital employees — registry, agents, policies, model governance, and audit in one place."
       />
       <div className="p-8">
+        {/* Governance signals */}
+        <div className="mb-6 grid grid-cols-2 gap-4 lg:grid-cols-4">
+          {signals.map((s) => (
+            <Link
+              key={s.label}
+              href={s.href}
+              className={`card p-4 transition hover:shadow-md ${
+                s.tone === "warn" && s.value > 0 ? "border-amber-300 bg-amber-50" : ""
+              }`}
+            >
+              <div className="text-xs font-medium text-slate-500">{s.label}</div>
+              <div
+                className={`mt-1 text-2xl font-semibold ${
+                  s.tone === "warn" && s.value > 0 ? "text-amber-700" : ""
+                }`}
+              >
+                {s.value}
+              </div>
+            </Link>
+          ))}
+        </div>
+
         <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
           <Stat
             label="Registry Records"
