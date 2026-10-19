@@ -7,22 +7,30 @@ import { Tenant, TenantTier, TierConfig } from "@/lib/types";
 
 type TenantWithConfig = Tenant & { config: TierConfig };
 
-const TYPE_LABEL: Record<Tenant["type"], string> = {
-  org: "Org",
-  bu: "Business Unit",
-  function: "Function",
-  subunit: "Sub-unit",
+const TYPE_META: Record<Tenant["type"], { label: string; icon: string; color: string }> = {
+  org: { label: "Org", icon: "🏛", color: "bg-slate-900 text-white" },
+  bu: { label: "Business Unit", icon: "🏢", color: "bg-indigo-50 text-indigo-700" },
+  function: { label: "Function", icon: "⚙", color: "bg-teal-50 text-teal-700" },
+  subunit: { label: "Sub-unit", icon: "•", color: "bg-slate-100 text-slate-600" },
 };
-const TYPE_COLOR: Record<Tenant["type"], string> = {
-  org: "bg-slate-900 text-white",
-  bu: "bg-indigo-50 text-indigo-700",
-  function: "bg-teal-50 text-teal-700",
-  subunit: "bg-slate-100 text-slate-600",
-};
+
+function TierChip({ tier }: { tier: TenantTier }) {
+  return (
+    <span
+      className={`badge ${
+        tier === "pro" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"
+      }`}
+    >
+      {tier}
+    </span>
+  );
+}
 
 export default function TenantsPage() {
   const [tenants, setTenants] = useState<TenantWithConfig[]>([]);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [selectedId, setSelectedId] = useState<string>("takeda");
+  const [query, setQuery] = useState("");
   const [show, setShow] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [form, setForm] = useState({
@@ -36,7 +44,6 @@ export default function TenantsPage() {
   async function load() {
     const d = await getJSON<{ tenants: TenantWithConfig[] }>("/api/tenants");
     setTenants(d.tenants);
-    // expand root + BUs/functions by default
     setExpanded(
       new Set(
         d.tenants
@@ -52,18 +59,36 @@ export default function TenantsPage() {
   const childrenOf = useMemo(() => {
     const m = new Map<string | null, TenantWithConfig[]>();
     for (const t of tenants) {
-      const key = t.parentId;
-      if (!m.has(key)) m.set(key, []);
-      m.get(key)!.push(t);
+      const k = t.parentId;
+      if (!m.has(k)) m.set(k, []);
+      m.get(k)!.push(t);
     }
     return m;
   }, [tenants]);
 
+  const byId = useMemo(() => {
+    const m = new Map<string, TenantWithConfig>();
+    tenants.forEach((t) => m.set(t.id, t));
+    return m;
+  }, [tenants]);
+
+  const selected = byId.get(selectedId) ?? null;
+
+  // Breadcrumb path from root to selected.
+  const path = useMemo(() => {
+    const out: TenantWithConfig[] = [];
+    let cur = selected;
+    while (cur) {
+      out.unshift(cur);
+      cur = cur.parentId ? byId.get(cur.parentId) ?? null : null;
+    }
+    return out;
+  }, [selected, byId]);
+
   function toggle(id: string) {
     setExpanded((s) => {
       const n = new Set(s);
-      if (n.has(id)) n.delete(id);
-      else n.add(id);
+      n.has(id) ? n.delete(id) : n.add(id);
       return n;
     });
   }
@@ -71,132 +96,261 @@ export default function TenantsPage() {
   async function create() {
     setError(null);
     try {
-      await sendJSON("/api/tenants", "POST", {
+      const created = await sendJSON<TenantWithConfig>("/api/tenants", "POST", {
         ...form,
         parentId: form.parentId || null,
       });
       setShow(false);
-      setForm({
-        tenantId: "",
-        tenantName: "",
-        tier: "basic",
-        parentId: "",
-        type: "subunit",
-      });
+      setForm({ tenantId: "", tenantName: "", tier: "basic", parentId: "", type: "subunit" });
       await load();
+      setSelectedId(created.id);
     } catch (e) {
       setError((e as Error).message);
     }
   }
 
-  function renderNode(node: TenantWithConfig, depth: number): React.ReactNode {
+  // Filtered flat list when searching; else the tree.
+  const matches = query
+    ? tenants.filter((t) =>
+        `${t.tenantName} ${t.tenantId}`.toLowerCase().includes(query.toLowerCase())
+      )
+    : [];
+
+  function Row({ node, depth }: { node: TenantWithConfig; depth: number }) {
     const kids = childrenOf.get(node.id) ?? [];
-    const isOpen = expanded.has(node.id);
+    const open = expanded.has(node.id);
+    const active = node.id === selectedId;
     return (
-      <div key={node.id}>
+      <div>
         <div
-          className="flex items-center gap-3 rounded-lg px-3 py-2 hover:bg-slate-50"
-          style={{ paddingLeft: `${depth * 20 + 12}px` }}
+          className={`group flex cursor-pointer items-center gap-2 rounded-lg py-1.5 pr-2 ${
+            active ? "bg-slate-100" : "hover:bg-slate-50"
+          }`}
+          style={{ paddingLeft: `${depth * 16 + 8}px` }}
+          onClick={() => setSelectedId(node.id)}
         >
           {kids.length > 0 ? (
             <button
-              onClick={() => toggle(node.id)}
-              className="w-4 text-slate-400 hover:text-slate-700"
+              onClick={(e) => {
+                e.stopPropagation();
+                toggle(node.id);
+              }}
+              className="w-4 shrink-0 text-slate-400 hover:text-slate-700"
             >
-              {isOpen ? "▾" : "▸"}
+              {open ? "▾" : "▸"}
             </button>
           ) : (
-            <span className="w-4 text-slate-300">•</span>
+            <span className="w-4 shrink-0 text-center text-slate-300">·</span>
           )}
-          <span className="flex-1 text-sm font-medium text-slate-800">
-            {node.tenantName}
-          </span>
-          <span className={`badge ${TYPE_COLOR[node.type]}`}>
-            {TYPE_LABEL[node.type]}
-          </span>
+          <span className="shrink-0 text-xs">{TYPE_META[node.type].icon}</span>
           <span
-            className={`badge ${
-              node.tier === "pro"
-                ? "bg-slate-900 text-white"
-                : "bg-slate-100 text-slate-600"
+            className={`flex-1 truncate text-sm ${
+              active ? "font-semibold text-slate-900" : "text-slate-700"
             }`}
           >
-            {node.tier}
+            {node.tenantName}
           </span>
-          <span className="badge bg-blue-50 text-blue-700">
-            {node.isolation === "silo" ? "silo" : "pool"}
-          </span>
-          <span className="mono hidden w-48 truncate text-xs text-slate-400 md:inline">
-            {node.resourcePool}
-          </span>
+          <TierChip tier={node.tier} />
         </div>
-        {isOpen && kids.map((k) => renderNode(k, depth + 1))}
+        {open && kids.map((k) => <Row key={k.id} node={k} depth={depth + 1} />)}
       </div>
     );
   }
 
   const roots = childrenOf.get(null) ?? [];
-  const counts = {
-    total: tenants.length,
-    bu: tenants.filter((t) => t.type === "bu").length,
-    fn: tenants.filter((t) => t.type === "function").length,
-    pro: tenants.filter((t) => t.tier === "pro").length,
-  };
+  const selChildren = selected ? childrenOf.get(selected.id) ?? [] : [];
 
   return (
     <>
       <PageHeader
         title="Tenants"
-        subtitle="Takeda organizational hierarchy — Business Units & Functions as tenant nodes, each with its own tier and pool/silo isolation."
+        subtitle="Takeda organization — Business Units & Functions as governed tenant nodes."
         action={
           <button className="btn-primary" onClick={() => setShow(true)}>
             + Onboard Tenant
           </button>
         }
       />
-      <div className="px-8 pb-10">
-        {/* summary stats */}
-        <div className="mb-5 grid grid-cols-2 gap-4 md:grid-cols-4">
-          {[
-            ["Total nodes", counts.total],
-            ["Business Units", counts.bu],
-            ["Functions", counts.fn],
-            ["Pro / siloed", counts.pro],
-          ].map(([label, val]) => (
-            <div key={label} className="card p-4">
-              <div className="text-xs font-medium text-slate-400">{label}</div>
-              <div className="mt-1 text-2xl font-semibold">{val}</div>
-            </div>
-          ))}
-        </div>
-
-        {tenants.length === 0 ? (
-          <EmptyState text="No tenants yet." />
-        ) : (
-          <div className="card p-3">
-            <div className="flex items-center justify-between px-3 py-2">
-              <h2 className="text-sm font-semibold text-slate-600">
-                Organization tree
-              </h2>
-              <div className="flex gap-2 text-xs">
+      <div className="grid gap-6 px-8 pb-10 lg:grid-cols-[360px_1fr]">
+        {/* LEFT: tree / search */}
+        <div className="card flex h-fit flex-col p-3">
+          <input
+            className="input mb-2"
+            placeholder="Search BU / function…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+          {!query && (
+            <div className="mb-2 flex items-center justify-between px-1 text-xs text-slate-400">
+              <span>Organization tree</span>
+              <span className="flex gap-2">
                 <button
-                  className="text-slate-500 hover:text-slate-900"
+                  className="hover:text-slate-700"
                   onClick={() => setExpanded(new Set(tenants.map((t) => t.id)))}
                 >
-                  Expand all
+                  Expand
                 </button>
-                <span className="text-slate-300">·</span>
                 <button
-                  className="text-slate-500 hover:text-slate-900"
+                  className="hover:text-slate-700"
                   onClick={() => setExpanded(new Set())}
                 >
-                  Collapse all
+                  Collapse
                 </button>
-              </div>
+              </span>
             </div>
-            {roots.map((r) => renderNode(r, 0))}
+          )}
+          <div className="max-h-[70vh] overflow-y-auto">
+            {query ? (
+              matches.length === 0 ? (
+                <p className="p-3 text-sm text-slate-400">No matches.</p>
+              ) : (
+                matches.map((m) => (
+                  <button
+                    key={m.id}
+                    onClick={() => {
+                      setSelectedId(m.id);
+                      setQuery("");
+                    }}
+                    className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm hover:bg-slate-50"
+                  >
+                    <span className="text-xs">{TYPE_META[m.type].icon}</span>
+                    <span className="flex-1 truncate">{m.tenantName}</span>
+                    <TierChip tier={m.tier} />
+                  </button>
+                ))
+              )
+            ) : (
+              roots.map((r) => <Row key={r.id} node={r} depth={0} />)
+            )}
           </div>
-        )}
+        </div>
+
+        {/* RIGHT: detail panel */}
+        <div>
+          {!selected ? (
+            <EmptyState text="Select a node to see details." />
+          ) : (
+            <div className="space-y-5">
+              {/* breadcrumb */}
+              <div className="flex flex-wrap items-center gap-1 text-sm text-slate-500">
+                {path.map((p, i) => (
+                  <span key={p.id} className="flex items-center gap-1">
+                    {i > 0 && <span className="text-slate-300">/</span>}
+                    <button
+                      className={
+                        p.id === selected.id
+                          ? "font-semibold text-slate-900"
+                          : "hover:text-slate-900"
+                      }
+                      onClick={() => setSelectedId(p.id)}
+                    >
+                      {p.tenantName}
+                    </button>
+                  </span>
+                ))}
+              </div>
+
+              {/* header card */}
+              <div className="card p-6">
+                <div className="flex items-start justify-between">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-lg">{TYPE_META[selected.type].icon}</span>
+                      <h2 className="text-xl font-semibold">{selected.tenantName}</h2>
+                    </div>
+                    <div className="mono mt-1 text-xs text-slate-400">
+                      {selected.tenantId}
+                    </div>
+                  </div>
+                  <span className={`badge ${TYPE_META[selected.type].color}`}>
+                    {TYPE_META[selected.type].label}
+                  </span>
+                </div>
+
+                <div className="mt-5 grid grid-cols-2 gap-5 md:grid-cols-4">
+                  <Attr label="Tier" value={<TierChip tier={selected.tier} />} />
+                  <Attr
+                    label="Isolation"
+                    value={
+                      <span className="badge bg-blue-50 text-blue-700">
+                        {selected.isolation === "silo" ? "Silo (dedicated)" : "Pool (shared)"}
+                      </span>
+                    }
+                  />
+                  <Attr label="Resource pool" value={<span className="mono text-xs">{selected.resourcePool}</span>} />
+                  <Attr label="Sub-nodes" value={String(selChildren.length)} />
+                </div>
+              </div>
+
+              {/* tier config */}
+              <div className="card p-6">
+                <h3 className="text-sm font-semibold">Tier limits &amp; features</h3>
+                <div className="mt-3 grid grid-cols-2 gap-4 md:grid-cols-4">
+                  <Attr label="Max agents" value={String(selected.config.maxAgents)} />
+                  <Attr label="Tools / agent" value={String(selected.config.maxToolsPerAgent)} />
+                  <Attr label="Knowledge bases" value={String(selected.config.maxKnowledgeBases)} />
+                  <Attr
+                    label="Token budget / mo"
+                    value={
+                      selected.config.monthlyTokenBudget
+                        ? selected.config.monthlyTokenBudget.toLocaleString()
+                        : "Unlimited"
+                    }
+                  />
+                </div>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {[
+                    ["Analytics", selected.config.enableAnalytics],
+                    ["Audit export", selected.config.enableAuditExport],
+                    ["Custom policies", selected.config.enableCustomPolicies],
+                    ["Dedicated gateway", selected.config.enableDedicatedGateway],
+                  ].map(([label, on]) => (
+                    <span
+                      key={label as string}
+                      className={`badge ${
+                        on ? "bg-green-50 text-green-700" : "bg-slate-100 text-slate-400"
+                      }`}
+                    >
+                      {on ? "✓" : "—"} {label}
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              {/* children */}
+              {selChildren.length > 0 && (
+                <div className="card p-6">
+                  <h3 className="text-sm font-semibold">
+                    Sub-nodes ({selChildren.length})
+                  </h3>
+                  <div className="mt-3 grid gap-2 md:grid-cols-2">
+                    {selChildren.map((c) => (
+                      <button
+                        key={c.id}
+                        onClick={() => setSelectedId(c.id)}
+                        className="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-left hover:border-slate-300"
+                      >
+                        <span className="text-xs">{TYPE_META[c.type].icon}</span>
+                        <span className="flex-1 truncate text-sm">{c.tenantName}</span>
+                        <TierChip tier={c.tier} />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <button
+                className="btn-ghost"
+                onClick={() => {
+                  setForm((f) => ({ ...f, parentId: selected.id, type: "subunit" }));
+                  setShow(true);
+                }}
+              >
+                + Add sub-unit under {selected.tenantName}
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
       {show && (
@@ -230,7 +384,6 @@ export default function TenantsPage() {
                 <option value="">(none — top-level)</option>
                 {tenants.map((t) => (
                   <option key={t.id} value={t.id}>
-                    {"— ".repeat(0)}
                     {t.tenantName}
                   </option>
                 ))}
@@ -240,9 +393,7 @@ export default function TenantsPage() {
               <select
                 className="input"
                 value={form.type}
-                onChange={(e) =>
-                  setForm({ ...form, type: e.target.value as Tenant["type"] })
-                }
+                onChange={(e) => setForm({ ...form, type: e.target.value as Tenant["type"] })}
               >
                 <option value="bu">Business Unit</option>
                 <option value="function">Function</option>
@@ -269,9 +420,7 @@ export default function TenantsPage() {
               <select
                 className="input"
                 value={form.tier}
-                onChange={(e) =>
-                  setForm({ ...form, tier: e.target.value as TenantTier })
-                }
+                onChange={(e) => setForm({ ...form, tier: e.target.value as TenantTier })}
               >
                 <option value="basic">Basic (pooled / shared)</option>
                 <option value="pro">Pro (siloed / dedicated)</option>
@@ -279,12 +428,21 @@ export default function TenantsPage() {
             </Field>
             <div className="rounded-lg bg-slate-50 p-3 text-xs text-slate-600">
               {form.tier === "pro"
-                ? "Pro → silo isolation, unlimited token budget, analytics, audit export, custom policies, dedicated gateway."
-                : "Basic → pool isolation, 1M token budget, up to 3 agents, core features only."}
+                ? "Pro → silo isolation, unlimited tokens, analytics, audit export, custom policies, dedicated gateway, up to 20 KBs."
+                : "Basic → pool isolation, 1M tokens, up to 3 agents, 1 KB, core features only."}
             </div>
           </div>
         </Modal>
       )}
     </>
+  );
+}
+
+function Attr({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div>
+      <div className="text-xs font-medium text-slate-400">{label}</div>
+      <div className="mt-1 text-sm text-slate-800">{value}</div>
+    </div>
   );
 }

@@ -14,6 +14,8 @@ import {
 import { getJSON, sendJSON } from "@/lib/api";
 import {
   CredentialType,
+  KbProvider,
+  KnowledgeConfig,
   McpSchema,
   Registry,
   RegistryRecord,
@@ -21,6 +23,26 @@ import {
   RecordStatus,
   RecordType,
 } from "@/lib/types";
+
+// Parse the free-text connection box into provider-specific connection fields.
+function parseKbConnection(
+  provider: KbProvider,
+  text: string
+): KnowledgeConfig["connection"] {
+  const v = text.trim();
+  switch (provider) {
+    case "Bedrock Knowledge Base":
+      return { knowledgeBaseId: v, region: "us-east-1" };
+    case "Databricks Vector Search":
+      return { endpoint: v, indexName: v };
+    case "MongoDB Atlas Vector Search":
+      return { clusterUri: v };
+    case "OpenSearch":
+      return { openSearchEndpoint: v };
+    default:
+      return { indexOrNamespace: v };
+  }
+}
 
 interface RegistryData {
   registries: Registry[];
@@ -328,25 +350,41 @@ function CreateRecord({
   const [credentialType, setCredentialType] =
     useState<CredentialType>("No authorization");
   const [schemaText, setSchemaText] = useState("");
+  // Knowledge Base fields
+  const [kbProvider, setKbProvider] = useState<KbProvider>("Bedrock Knowledge Base");
+  const [kbConnection, setKbConnection] = useState("");
+  const [kbTopK, setKbTopK] = useState(5);
   const [error, setError] = useState<string | null>(null);
+
+  const isKb = type === "Knowledge Base";
 
   async function submit(status: "draft" | "submit") {
     setError(null);
     try {
       let mcpSchema: McpSchema | undefined;
-      if (recordSource === "define-manually" && schemaText.trim()) {
+      if (!isKb && recordSource === "define-manually" && schemaText.trim()) {
         mcpSchema = JSON.parse(schemaText) as McpSchema;
+      }
+      let knowledgeConfig: KnowledgeConfig | undefined;
+      if (isKb) {
+        knowledgeConfig = {
+          provider: kbProvider,
+          connection: parseKbConnection(kbProvider, kbConnection),
+          retrieval: { topK: kbTopK, scoreThreshold: 0.4, mode: "hybrid", citations: true },
+        };
       }
       const rec = await sendJSON<RegistryRecord>("/api/registry", "POST", {
         kind: "record",
         registryId,
         name: name || undefined,
         description,
-        recordSource,
+        // KBs are always define-manually (no live MCP introspection).
+        recordSource: isKb ? "define-manually" : recordSource,
         type,
         credentialType,
         endpoint: endpoint || undefined,
         mcpSchema,
+        knowledgeConfig,
       });
       if (status === "submit") {
         await sendJSON("/api/registry", "PATCH", {
@@ -426,6 +464,12 @@ function CreateRecord({
               title="Custom"
               description="Custom protocol implementation. Define your own interface specification and integration requirements."
             />
+            <RadioCard
+              selected={type === "Knowledge Base"}
+              onClick={() => setType("Knowledge Base")}
+              title="Knowledge Base"
+              description="A governed retrieval source (Bedrock KB, Databricks Vector Search, MongoDB Atlas, OpenSearch) agents reference for RAG."
+            />
           </div>
 
           <div className="mt-6 grid gap-4 md:grid-cols-2">
@@ -491,7 +535,7 @@ function CreateRecord({
             </>
           )}
 
-          {recordSource === "define-manually" && (
+          {recordSource === "define-manually" && !isKb && (
             <div className="mt-4">
               <Field label="MCP schema" hint="JSON with lambdaArn and toolSchema[].">
                 <textarea
@@ -501,6 +545,88 @@ function CreateRecord({
                   placeholder='{"name":"ExpenseTools","version":"1.0.0","lambdaArn":"arn:aws:lambda:…","toolSchema":[…]}'
                 />
               </Field>
+            </div>
+          )}
+
+          {isKb && (
+            <div className="mt-4 space-y-4">
+              <Field label="Vector / KB provider">
+                <select
+                  className="input"
+                  value={kbProvider}
+                  onChange={(e) => setKbProvider(e.target.value as KbProvider)}
+                >
+                  <option>Bedrock Knowledge Base</option>
+                  <option>Databricks Vector Search</option>
+                  <option>MongoDB Atlas Vector Search</option>
+                  <option>OpenSearch</option>
+                  <option>Other Vector Store</option>
+                </select>
+              </Field>
+              <Field
+                label="Connection"
+                hint={
+                  kbProvider === "Bedrock Knowledge Base"
+                    ? "Knowledge Base ID (e.g. KB1A2B3C4D)"
+                    : kbProvider === "Databricks Vector Search"
+                    ? "Index endpoint / index name (Unity Catalog governed)"
+                    : kbProvider === "MongoDB Atlas Vector Search"
+                    ? "Cluster URI"
+                    : "Endpoint / index"
+                }
+              >
+                <input
+                  className="input mono"
+                  value={kbConnection}
+                  onChange={(e) => setKbConnection(e.target.value)}
+                  placeholder={
+                    kbProvider === "Bedrock Knowledge Base"
+                      ? "KB1A2B3C4D"
+                      : "https://…"
+                  }
+                />
+              </Field>
+              <div className="grid gap-4 md:grid-cols-2">
+                <Field label="Top K (chunks)">
+                  <input
+                    type="number"
+                    className="input"
+                    value={kbTopK}
+                    onChange={(e) => setKbTopK(Number(e.target.value))}
+                  />
+                </Field>
+                <div className="flex items-end">
+                  <p className="text-xs text-slate-500">
+                    Hybrid retrieval, citations on. The provider&apos;s native
+                    governance (Unity Catalog / Bedrock KB / index ACLs) enforces
+                    data access under the caller&apos;s identity.
+                  </p>
+                </div>
+              </div>
+              <div className="text-sm font-medium text-slate-700">
+                Credential type
+              </div>
+              <div className="space-y-3">
+                {(["IAM Role", "OAuth client", "API key", "No authorization"] as CredentialType[]).map(
+                  (c) => (
+                    <RadioCard
+                      key={c}
+                      selected={credentialType === c}
+                      onClick={() => setCredentialType(c)}
+                      title={c}
+                      description={
+                        c === "IAM Role"
+                          ? "SigV4 (Bedrock KB / AWS-native)."
+                          : c === "OAuth client"
+                          ? "OAuth 2.0 / SCIM-mapped (Databricks)."
+                          : c === "API key"
+                          ? "Secret from Secrets Manager (MongoDB/Pinecone)."
+                          : "Public endpoint."
+                      }
+                    />
+                  )
+                )}
+              </div>
             </div>
           )}
         </section>
@@ -654,6 +780,28 @@ function RecordDetails({
                 k="Lambda ARN"
                 v={<span className="mono text-xs">{record.mcpSchema.lambdaArn}</span>}
               />
+            </div>
+          </div>
+        )}
+
+        {record.knowledgeConfig && (
+          <div className="card p-6">
+            <h3 className="mb-3 text-base font-semibold">🧠 Knowledge Base</h3>
+            <div className="grid grid-cols-1 gap-5 md:grid-cols-3">
+              <Detail k="Provider" v={record.knowledgeConfig.provider} />
+              <Detail
+                k="Retrieval"
+                v={`${record.knowledgeConfig.retrieval.mode} · top ${record.knowledgeConfig.retrieval.topK} · citations ${record.knowledgeConfig.retrieval.citations ? "on" : "off"}`}
+              />
+              <Detail
+                k="Residency"
+                v={record.knowledgeConfig.residencyRegion ?? "—"}
+              />
+            </div>
+            <div className="mt-3 rounded-lg bg-slate-50 p-3">
+              <span className="mono text-xs text-slate-600">
+                {JSON.stringify(record.knowledgeConfig.connection)}
+              </span>
             </div>
           </div>
         )}

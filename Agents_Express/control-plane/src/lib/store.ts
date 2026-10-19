@@ -23,6 +23,8 @@ import {
   Tenant,
   TenantNodeType,
   TenantTier,
+  Workflow,
+  WorkflowRun,
 } from "./types";
 
 export interface Store {
@@ -39,6 +41,8 @@ export interface Store {
   policyStores: PolicyStore[];
   providers: ModelProvider[];
   routes: ModelRoute[];
+  workflows: Workflow[];
+  workflowRuns: WorkflowRun[];
   audit: AuditEvent[];
 }
 
@@ -237,6 +241,50 @@ function seed(): Store {
         owner: "finance-platform",
         createdAt: iso(4),
       },
+      {
+        id: "rec-kb-bedrock-policies",
+        registryId: "registry-anycompany",
+        name: "CorporatePolicies_KB",
+        description: "Corporate expense & travel policies (Bedrock Knowledge Base).",
+        recordSource: "define-manually",
+        type: "Knowledge Base",
+        credentialType: "IAM Role",
+        status: "Approved",
+        knowledgeConfig: {
+          provider: "Bedrock Knowledge Base",
+          connection: { knowledgeBaseId: "KB1A2B3C4D", region: "us-east-1" },
+          retrieval: { topK: 5, scoreThreshold: 0.4, mode: "hybrid", citations: true },
+          residencyRegion: "us-east-1",
+        },
+        tools: [],
+        owner: "platform-team",
+        createdAt: iso(3),
+      },
+      {
+        id: "rec-kb-databricks-clinical",
+        registryId: "registry-anycompany",
+        name: "ClinicalTrials_VectorSearch",
+        description:
+          "Clinical trial documents via Databricks Vector Search (Unity Catalog governed).",
+        recordSource: "define-manually",
+        type: "Knowledge Base",
+        credentialType: "OAuth client",
+        // Draft on purpose — demonstrates approved-only gating for KBs too.
+        status: "Draft",
+        knowledgeConfig: {
+          provider: "Databricks Vector Search",
+          connection: {
+            endpoint: "https://dbc-xxxx.cloud.databricks.com",
+            indexName: "clinical.docs_index",
+            unityCatalog: "rnd.clinical",
+          },
+          retrieval: { topK: 8, scoreThreshold: 0.5, mode: "semantic", citations: true },
+          residencyRegion: "eu-west-1",
+        },
+        tools: [],
+        owner: "fn-rnd",
+        createdAt: iso(2),
+      },
     ],
     models: [
       {
@@ -260,6 +308,7 @@ function seed(): Store {
         // Only the APPROVED expense_tool record is attachable; AWSKnowledgeMCP
         // stayed in Draft so it cannot be wired into the agent.
         toolRefs: ["rec-expense-tool"],
+        knowledgeRefs: ["rec-kb-bedrock-policies"],
         compute: { runtime: "Bedrock AgentCore" },
         visibility: "public",
         status: "ready",
@@ -702,6 +751,50 @@ when {
         enabled: true,
       },
     ],
+    workflows: [
+      {
+        id: "wf-expense-triage",
+        name: "Expense Triage",
+        description:
+          "Research the expense context, draft a recommendation, then a reviewer approves before finalizing.",
+        tenantId: "fn-finance",
+        steps: [
+          {
+            id: "step-researcher",
+            name: "Researcher",
+            modelId: "model-claude-opus-46",
+            prompt:
+              "Analyze the expense request. Identify the category, whether it looks policy-compliant, and any red flags. Be concise (3-4 bullet points).",
+            toolRefs: ["rec-expense-tool"],
+            knowledgeRefs: ["rec-kb-bedrock-policies"],
+            reviewGate: false,
+          },
+          {
+            id: "step-drafter",
+            name: "Drafter",
+            modelId: "model-claude-opus-46",
+            prompt:
+              "Based on the research, draft a short recommendation (approve / reject / escalate) with a one-sentence justification.",
+            toolRefs: [],
+            knowledgeRefs: [],
+            reviewGate: true,
+          },
+          {
+            id: "step-reviewer",
+            name: "Reviewer",
+            modelId: "model-claude-opus-46",
+            prompt:
+              "Produce the final decision message to send to the employee, incorporating the approved recommendation. Professional tone, 2-3 sentences.",
+            toolRefs: ["rec-expense-tool"],
+            knowledgeRefs: [],
+            reviewGate: false,
+          },
+        ],
+        createdAt: iso(2),
+        updatedAt: iso(1),
+      },
+    ],
+    workflowRuns: [],
     audit: [
       {
         id: "evt-1",

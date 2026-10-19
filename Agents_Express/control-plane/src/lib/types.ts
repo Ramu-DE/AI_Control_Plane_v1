@@ -20,6 +20,7 @@ export type IsolationModel = "pool" | "silo";
 export interface TierConfig {
   maxAgents: number;
   maxToolsPerAgent: number;
+  maxKnowledgeBases: number;
   monthlyTokenBudget: number | null; // null = unlimited
   enableAnalytics: boolean;
   enableAuditExport: boolean;
@@ -66,10 +67,57 @@ export interface Registry {
 export type RecordSource = "synchronize-from-endpoint" | "define-manually";
 
 // What kind of resource is being published.
-export type RecordType = "MCP" | "Agent" | "Agent skills" | "Custom";
+export type RecordType = "MCP" | "Agent" | "Agent skills" | "Custom" | "Knowledge Base";
 
 // Credential type used to reach the resource.
-export type CredentialType = "No authorization" | "IAM Role" | "OAuth client";
+export type CredentialType =
+  | "No authorization"
+  | "IAM Role"
+  | "OAuth client"
+  | "API key";
+
+// ---------- Knowledge Bases (vector / retrieval sources) ----------
+// A KB is a governed retrieval source referenced by agents for RAG. The
+// provider adapter normalizes retrieval to retrieve(query, topK, filters).
+export type KbProvider =
+  | "Bedrock Knowledge Base"
+  | "Databricks Vector Search"
+  | "MongoDB Atlas Vector Search"
+  | "OpenSearch"
+  | "Other Vector Store";
+
+export type RetrievalMode = "semantic" | "hybrid" | "keyword";
+
+export interface KnowledgeConfig {
+  provider: KbProvider;
+  // Provider-specific connection hints (only the relevant ones are set).
+  connection: {
+    // Bedrock KB
+    knowledgeBaseId?: string;
+    region?: string;
+    // Databricks Vector Search
+    endpoint?: string;
+    indexName?: string;
+    unityCatalog?: string; // catalog.schema
+    // MongoDB Atlas
+    clusterUri?: string;
+    database?: string;
+    collection?: string;
+    vectorIndex?: string;
+    // OpenSearch / generic
+    openSearchEndpoint?: string;
+    indexOrNamespace?: string;
+  };
+  // Default retrieval settings (overridable per agent reference).
+  retrieval: {
+    topK: number;
+    scoreThreshold: number;
+    mode: RetrievalMode;
+    citations: boolean;
+  };
+  // Residency hint for regulated data (EU/JP/US).
+  residencyRegion?: string;
+}
 
 // Governance lifecycle: Draft -> Pending approval -> Approved/Rejected -> Deprecated.
 export type RecordStatus =
@@ -108,6 +156,8 @@ export interface RegistryRecord {
   endpoint?: string;
   // For define-manually (and after endpoint sync completes) — the schema.
   mcpSchema?: McpSchema;
+  // For Knowledge Base records — provider + connection + retrieval config.
+  knowledgeConfig?: KnowledgeConfig;
   // Convenience: the flat list of tool names exposed by this record.
   tools: string[];
   owner: string;
@@ -130,6 +180,8 @@ export interface AgentConfig {
   systemPrompt: string;
   // Registry record ids whose tools this agent may use (approved records only).
   toolRefs: ID[];
+  // Approved Knowledge Base record ids this agent may retrieve from (RAG).
+  knowledgeRefs: ID[];
   // Compute is informational: the agent runs on Bedrock AgentCore Runtime.
   compute: {
     runtime: string; // e.g. "Bedrock AgentCore"
@@ -361,4 +413,84 @@ export interface PolicyStore {
   schema: string; // JSON schema text
   policies: StorePolicy[];
   syncHistory: SyncEntry[];
+}
+
+
+// ---------- Multi-Agent Workflows (real execution on Bedrock) ----------
+// A workflow is an ordered set of steps; each step is an agent (prompt + model)
+// that runs on Bedrock, optionally gated by human review.
+
+export interface WorkflowStep {
+  id: ID;
+  name: string; // e.g. "Researcher"
+  modelId: ID; // catalog model id to run this step with
+  prompt: string; // the step's instruction/system prompt
+  toolRefs: ID[];
+  knowledgeRefs: ID[];
+  reviewGate: boolean; // pause after this step for human approve/revise/deny
+}
+
+export interface Workflow {
+  id: ID;
+  name: string;
+  description: string;
+  tenantId: ID;
+  steps: WorkflowStep[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type StepRunStatus =
+  | "pending"
+  | "running"
+  | "awaiting-review"
+  | "approved"
+  | "revised"
+  | "denied"
+  | "done"
+  | "error";
+
+export interface TokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+}
+
+export interface StepRun {
+  stepId: ID;
+  name: string;
+  status: StepRunStatus;
+  output: string; // actual Bedrock text, possibly human-revised
+  modelId: string; // resolved upstream model id actually invoked
+  usage: TokenUsage | null;
+  latencyMs: number | null;
+  costUsd: number | null;
+  reviewGate: boolean;
+  reviewer?: string;
+  reviewNote?: string;
+  startedAt?: string;
+  finishedAt?: string;
+  error?: string;
+}
+
+export type WorkflowRunStatus =
+  | "running"
+  | "paused"
+  | "completed"
+  | "denied"
+  | "error";
+
+export interface WorkflowRun {
+  id: ID;
+  workflowId: ID;
+  workflowName: string;
+  tenantId: ID;
+  status: WorkflowRunStatus;
+  input: string;
+  steps: StepRun[];
+  currentStep: number;
+  totalCostUsd: number;
+  totalTokens: number;
+  createdAt: string;
+  updatedAt: string;
 }

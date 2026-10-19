@@ -8,6 +8,7 @@ export const TIER_CONFIGS: Record<TenantTier, TierConfig> = {
   basic: {
     maxAgents: 3,
     maxToolsPerAgent: 2,
+    maxKnowledgeBases: 1,
     monthlyTokenBudget: 1_000_000,
     enableAnalytics: false,
     enableAuditExport: false,
@@ -18,6 +19,7 @@ export const TIER_CONFIGS: Record<TenantTier, TierConfig> = {
   pro: {
     maxAgents: 50,
     maxToolsPerAgent: 20,
+    maxKnowledgeBases: 20,
     monthlyTokenBudget: null, // unlimited
     enableAnalytics: true,
     enableAuditExport: true,

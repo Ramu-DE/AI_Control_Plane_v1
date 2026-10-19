@@ -71,6 +71,31 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // Knowledge Bases: approved-only + tier limit (maxKnowledgeBases).
+  const knowledgeRefs = body.knowledgeRefs ?? [];
+  if (knowledgeRefs.length > tier.maxKnowledgeBases) {
+    return NextResponse.json(
+      {
+        error: `Tier limit: '${tenant.tenantName}' (${tenant.tier}) allows ${tier.maxKnowledgeBases} knowledge base(s) per agent.`,
+      },
+      { status: 403 }
+    );
+  }
+  const kbNotApproved = knowledgeRefs.filter((id) => {
+    const rec = store.records.find((r) => r.id === id);
+    return !rec || rec.type !== "Knowledge Base" || rec.status !== "Approved";
+  });
+  if (kbNotApproved.length > 0) {
+    return NextResponse.json(
+      {
+        error:
+          "Only approved Knowledge Base records can be attached. Invalid: " +
+          kbNotApproved.join(", "),
+      },
+      { status: 400 }
+    );
+  }
+
   const agent: AgentConfig = {
     id: newId("agent"),
     name: body.name,
@@ -79,6 +104,7 @@ export async function POST(req: NextRequest) {
     modelId: body.modelId,
     systemPrompt: body.systemPrompt ?? "",
     toolRefs,
+    knowledgeRefs,
     compute: body.compute ?? { runtime: "Bedrock AgentCore" },
     visibility: body.visibility ?? "private",
     status: body.status ?? "draft",

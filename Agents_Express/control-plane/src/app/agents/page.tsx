@@ -19,7 +19,7 @@ import {
   Tenant,
 } from "@/lib/types";
 
-type SubTab = "general" | "model" | "prompt" | "tools" | "compute";
+type SubTab = "general" | "model" | "prompt" | "tools" | "knowledge" | "compute";
 
 export default function AgentsPage() {
   const [agents, setAgents] = useState<AgentConfig[]>([]);
@@ -137,6 +137,7 @@ function CreateAgentModal({
     modelId: models[0]?.id ?? "",
     systemPrompt: "",
     toolRefs: [] as string[],
+    knowledgeRefs: [] as string[],
     visibility: "private" as AgentVisibility,
   });
   const [error, setError] = useState<string | null>(null);
@@ -147,6 +148,15 @@ function CreateAgentModal({
       toolRefs: f.toolRefs.includes(id)
         ? f.toolRefs.filter((t) => t !== id)
         : [...f.toolRefs, id],
+    }));
+  }
+
+  function toggleKb(id: string) {
+    setForm((f) => ({
+      ...f,
+      knowledgeRefs: f.knowledgeRefs.includes(id)
+        ? f.knowledgeRefs.filter((t) => t !== id)
+        : [...f.knowledgeRefs, id],
     }));
   }
 
@@ -239,25 +249,55 @@ function CreateAgentModal({
         <div>
           <span className="label">Tools (approved records only)</span>
           <div className="flex flex-wrap gap-2">
-            {approved.length === 0 ? (
+            {approved.filter((r) => r.type !== "Knowledge Base").length === 0 ? (
               <span className="text-xs text-slate-400">
-                No approved records available.
+                No approved tool records available.
               </span>
             ) : (
-              approved.map((r) => (
-                <button
-                  key={r.id}
-                  type="button"
-                  onClick={() => toggleTool(r.id)}
-                  className={`badge border px-3 py-1 ${
-                    form.toolRefs.includes(r.id)
-                      ? "border-slate-900 bg-slate-900 text-white"
-                      : "border-slate-300 bg-white text-slate-600"
-                  }`}
-                >
-                  {r.name}
-                </button>
-              ))
+              approved
+                .filter((r) => r.type !== "Knowledge Base")
+                .map((r) => (
+                  <button
+                    key={r.id}
+                    type="button"
+                    onClick={() => toggleTool(r.id)}
+                    className={`badge border px-3 py-1 ${
+                      form.toolRefs.includes(r.id)
+                        ? "border-slate-900 bg-slate-900 text-white"
+                        : "border-slate-300 bg-white text-slate-600"
+                    }`}
+                  >
+                    {r.name}
+                  </button>
+                ))
+            )}
+          </div>
+        </div>
+        <div>
+          <span className="label">Knowledge Bases (approved, for RAG)</span>
+          <div className="flex flex-wrap gap-2">
+            {approved.filter((r) => r.type === "Knowledge Base").length === 0 ? (
+              <span className="text-xs text-slate-400">
+                No approved knowledge bases available.
+              </span>
+            ) : (
+              approved
+                .filter((r) => r.type === "Knowledge Base")
+                .map((r) => (
+                  <button
+                    key={r.id}
+                    type="button"
+                    onClick={() => toggleKb(r.id)}
+                    className={`badge border px-3 py-1 ${
+                      form.knowledgeRefs.includes(r.id)
+                        ? "border-slate-900 bg-slate-900 text-white"
+                        : "border-slate-300 bg-white text-slate-600"
+                    }`}
+                  >
+                    🧠 {r.name}
+                    {r.knowledgeConfig ? ` · ${r.knowledgeConfig.provider}` : ""}
+                  </button>
+                ))
             )}
           </div>
         </div>
@@ -300,12 +340,16 @@ function AgentDetail({
   const tools = agent.toolRefs
     .map((id) => approved.find((r) => r.id === id))
     .filter(Boolean) as RegistryRecord[];
+  const knowledge = agent.knowledgeRefs
+    .map((id) => approved.find((r) => r.id === id))
+    .filter(Boolean) as RegistryRecord[];
 
   const navItems: { key: SubTab; label: string; icon: string }[] = [
     { key: "general", label: "General", icon: "⚙" },
     { key: "model", label: "Model", icon: "◉" },
     { key: "prompt", label: "Prompt", icon: "💬" },
     { key: "tools", label: "Tools", icon: "🔧" },
+    { key: "knowledge", label: "Knowledge", icon: "🧠" },
     { key: "compute", label: "Compute", icon: "🗄" },
   ];
 
@@ -449,6 +493,57 @@ function AgentDetail({
                   </tbody>
                 </table>
               </div>
+            </div>
+          )}
+
+          {tab === "knowledge" && (
+            <div className="card p-6">
+              <h2 className="text-base font-semibold">Knowledge Bases</h2>
+              <p className="mt-0.5 text-sm text-slate-500">
+                Approved retrieval sources this agent can ground on (RAG). The
+                provider&apos;s native governance enforces data access.
+              </p>
+              {knowledge.length === 0 ? (
+                <p className="mt-4 text-sm text-slate-400">
+                  No knowledge bases attached.
+                </p>
+              ) : (
+                <div className="mt-4 space-y-3">
+                  {knowledge.map((k) => (
+                    <div
+                      key={k.id}
+                      className="rounded-lg border border-slate-200 p-4"
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium">🧠 {k.name}</span>
+                        <span className="badge bg-indigo-50 text-indigo-700">
+                          {k.knowledgeConfig?.provider}
+                        </span>
+                      </div>
+                      <div className="mt-1 text-xs text-slate-500">
+                        {k.description}
+                      </div>
+                      {k.knowledgeConfig && (
+                        <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-500">
+                          <span className="badge bg-slate-100">
+                            {k.knowledgeConfig.retrieval.mode} · top{" "}
+                            {k.knowledgeConfig.retrieval.topK}
+                          </span>
+                          <span className="badge bg-slate-100">
+                            citations{" "}
+                            {k.knowledgeConfig.retrieval.citations ? "on" : "off"}
+                          </span>
+                          {k.knowledgeConfig.residencyRegion && (
+                            <span className="badge bg-slate-100">
+                              {k.knowledgeConfig.residencyRegion}
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 

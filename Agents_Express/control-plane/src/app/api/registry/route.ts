@@ -97,6 +97,7 @@ export async function POST(req: NextRequest) {
       status: registry.autoApproval ? "Approved" : "Draft",
       endpoint: body.endpoint,
       mcpSchema,
+      knowledgeConfig: body.knowledgeConfig,
       tools,
       owner: body.owner ?? "console-user",
       createdAt: new Date().toISOString(),

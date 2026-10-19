@@ -116,6 +116,52 @@ Business users never get raw credentials. Each source is wrapped as a **registry
 
 ---
 
+## 4A. Knowledge Bases (vector / retrieval sources for RAG)
+
+Agents ground on governed **Knowledge Bases (KBs)** in addition to tools. A KB is a
+**first-class Registry record type** (`type = "Knowledge Base"`) that goes through the
+same approval lifecycle, is referenced by agents via `knowledgeRefs` (approved-only,
+tier-limited), and is fronted by a **pluggable provider adapter** normalizing retrieval
+to `retrieve(query, topK, filters) → {chunks, scores, citations}`.
+
+### Providers (one interface, many back-ends)
+| Provider | Connection | Auth | Governance authority |
+|---|---|---|---|
+| **Amazon Bedrock Knowledge Base** | `knowledgeBaseId`, region | IAM Role (SigV4) | Bedrock KB data-source policies |
+| **Databricks Vector Search** | endpoint, index, UC catalog.schema | OAuth / SCIM-mapped | **Unity Catalog** (row/column/masking) |
+| **MongoDB Atlas Vector Search** | cluster URI, db, collection, index | API key (Secrets Manager) | index/collection ACLs |
+| **OpenSearch** | endpoint, index | IAM / basic | index ACLs |
+| **Other vector stores** (Pinecone, pgvector, Weaviate) | endpoint + index | API key | provider ACLs |
+
+### Governance (same model as tools)
+- **Registry approval:** KB records are Draft → Pending → Approved; only **approved** KBs
+  are attachable to agents.
+- **Gateway Cedar (perimeter):** a `queryKnowledgeBase` action — e.g. only
+  `seniority_director` may query the "Clinical Trials KB".
+- **Source-of-truth at the provider:** Unity Catalog / Bedrock KB / index ACLs enforce
+  row/column/identity access under the **propagated end-user identity** (on-behalf-of).
+- **Tenant isolation:** pool tenants share a KB catalog with row filters; silo tenants
+  get dedicated KBs. Tier gates `maxKnowledgeBases` per agent (basic = 1, pro = 20).
+
+### Retrieval config (per agent reference)
+`topK`, `scoreThreshold`, `mode` (semantic / hybrid / keyword), `filters` (metadata, e.g.
+`region = EU`), `citations` (on for GxP so answers cite sources), optional rerank.
+
+### Compliance (Takeda)
+- **Citations/lineage:** every RAG answer records KB + chunk ids → GxP traceability.
+- **PII/PHI:** masking at the source (UC masks / IDMC classification), never in the agent.
+- **Residency:** pin KB region per BU (EU/JP/US).
+- **Audit:** every KB query is an audited event (who, which KB, query).
+- **IDMC tie-in:** KBs are discovered from the IDMC catalog (CDGC) with data-quality /
+  classification signals — builders pick governed sources, not raw indexes.
+
+### Phasing
+1. Model KB record type + agent `knowledgeRefs` + approved-only + tier limit (**done in the control-plane demo**).
+2. First real adapter: **Bedrock Knowledge Base** (`Retrieve` API).
+3. Add **Databricks Vector Search** (UC governance).
+4. Generalize to MongoDB / OpenSearch / others via the same adapter contract.
+5. Wire citations + audit + Cedar `queryKnowledgeBase` policies end to end.
+
 ## 5. Identity propagation (the make-or-break)
 
 ```
