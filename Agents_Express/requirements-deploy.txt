@@ -1,0 +1,6 @@
+# AgentExpress — tooling for deploying to Amazon Bedrock AgentCore Runtime.
+# Install with: pip install -r requirements-deploy.txt
+-r requirements.txt
+
+# Starter toolkit CLI: configure / launch / invoke agents on AgentCore Runtime
+bedrock-agentcore-starter-toolkit>=0.1.0

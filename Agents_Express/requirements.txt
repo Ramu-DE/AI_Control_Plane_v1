@@ -1,0 +1,10 @@
+# AgentExpress — core runtime dependencies
+# Strands Agents SDK: define agents, tools, and model providers
+strands-agents>=0.1.0
+strands-agents-tools>=0.1.0
+
+# Amazon Bedrock AgentCore SDK: wrap agents as AgentCore-compatible HTTP services
+bedrock-agentcore>=0.1.0
+
+# AWS SDK (used by Bedrock model provider and AgentCore)
+boto3>=1.35.0

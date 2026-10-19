@@ -1,0 +1,28 @@
+# ---- Secrets / sensitive (never commit) ----
+# AWS audit logs contain account inventory and a workshop sign-in password
+Agents_Express/aws-audit/logs/
+**/.env
+**/.env.local
+*.pem
+*.key
+
+# ---- Python ----
+**/.venv/
+**/venv/
+**/__pycache__/
+*.py[cod]
+*.egg-info/
+
+# ---- Node / Next.js ----
+**/node_modules/
+**/.next/
+**/out/
+**/build/
+**/dist/
+*.tsbuildinfo
+
+# ---- Logs / OS / IDE ----
+*.log
+.DS_Store
+.vscode/
+.idea/

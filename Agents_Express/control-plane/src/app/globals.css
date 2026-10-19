@@ -1,0 +1,69 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+body {
+  @apply bg-slate-50 text-slate-900 antialiased;
+}
+
+/* Cards: white, thin border, subtle radius (console style) */
+.card {
+  @apply rounded-xl border border-slate-200 bg-white;
+}
+
+/* Buttons — primary is BLACK like the console */
+.btn {
+  @apply inline-flex items-center justify-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium transition-colors;
+}
+.btn-primary {
+  @apply btn bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-40;
+}
+.btn-ghost {
+  @apply btn border border-slate-300 bg-white text-slate-700 hover:bg-slate-50;
+}
+
+/* Inputs */
+.input {
+  @apply w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none placeholder:text-slate-400 focus:border-slate-900 focus:ring-2 focus:ring-slate-200;
+}
+.label {
+  @apply mb-1.5 block text-sm font-medium text-slate-700;
+}
+.hint {
+  @apply mt-1 text-xs text-slate-400;
+}
+
+.badge {
+  @apply inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium;
+}
+
+/* Radio card used in the Create Record form */
+.radio-card {
+  @apply flex cursor-pointer gap-3 rounded-xl border bg-white p-4 transition-colors;
+}
+.radio-card-selected {
+  @apply border-slate-900 ring-1 ring-slate-900;
+}
+.radio-card-idle {
+  @apply border-slate-200 hover:border-slate-300;
+}
+
+/* monospace for ids / model ids / tool names */
+.mono {
+  @apply font-mono text-[13px];
+}
+
+/* Sidebar section label */
+.nav-section {
+  @apply px-3 pb-1 pt-4 text-[11px] font-semibold uppercase tracking-wider text-slate-400;
+}
+.nav-item {
+  @apply flex items-center gap-3 rounded-lg px-3 py-2 text-sm text-slate-700 hover:bg-slate-100;
+}
+.nav-item-active {
+  @apply bg-slate-100 font-medium text-slate-900;
+}
