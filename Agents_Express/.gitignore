@@ -21,6 +21,10 @@ Dockerfile
 .dockerignore
 *.log
 
+# ...but DO ship the control-plane container files (intentional, not artifacts)
+!control-plane/Dockerfile
+!control-plane/.dockerignore
+
 # IDE / OS
 .vscode/
 .idea/

@@ -1,0 +1,1 @@
+# Static assets served at the site root. Keep this dir so container builds succeed.
