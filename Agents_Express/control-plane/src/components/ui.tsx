@@ -118,11 +118,15 @@ export function RadioCard({
   onClick,
   title,
   description,
+  icon,
+  badge,
 }: {
   selected: boolean;
   onClick: () => void;
   title: string;
   description: string;
+  icon?: React.ReactNode;
+  badge?: React.ReactNode;
 }) {
   return (
     <button
@@ -139,8 +143,20 @@ export function RadioCard({
       >
         {selected && <span className="h-2 w-2 rounded-full bg-slate-900" />}
       </span>
-      <span>
-        <span className="block text-sm font-medium text-slate-900">{title}</span>
+      {icon && (
+        <span
+          className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-base ${
+            selected ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500"
+          }`}
+        >
+          {icon}
+        </span>
+      )}
+      <span className="min-w-0 flex-1">
+        <span className="flex items-center gap-2">
+          <span className="text-sm font-medium text-slate-900">{title}</span>
+          {badge}
+        </span>
         <span className="mt-0.5 block text-xs text-slate-500">{description}</span>
       </span>
     </button>

@@ -349,6 +349,12 @@ function CreateRecord({
   const [endpoint, setEndpoint] = useState("");
   const [credentialType, setCredentialType] =
     useState<CredentialType>("No authorization");
+  // Per-credential auth config (shown conditionally).
+  const [oauthClientId, setOauthClientId] = useState("");
+  const [oauthClientSecret, setOauthClientSecret] = useState("");
+  const [oauthTokenUrl, setOauthTokenUrl] = useState("");
+  const [iamRoleArn, setIamRoleArn] = useState("");
+  const [apiKeySecretRef, setApiKeySecretRef] = useState("");
   const [schemaText, setSchemaText] = useState("");
   // Knowledge Base fields
   const [kbProvider, setKbProvider] = useState<KbProvider>("Bedrock Knowledge Base");
@@ -357,6 +363,9 @@ function CreateRecord({
   const [error, setError] = useState<string | null>(null);
 
   const isKb = type === "Knowledge Base";
+  const needsEndpoint = recordSource === "synchronize-from-endpoint";
+  const endpointValid = !needsEndpoint || /^https:\/\/.+/i.test(endpoint.trim());
+  const canSubmit = endpointValid && (needsEndpoint || !!name.trim() || isKb);
 
   async function submit(status: "draft" | "submit") {
     setError(null);
@@ -419,12 +428,14 @@ function CreateRecord({
               selected={recordSource === "synchronize-from-endpoint"}
               onClick={() => setRecordSource("synchronize-from-endpoint")}
               title="Synchronize from endpoint"
-              description="Provide an endpoint URL and authentication details. The Registry will automatically detect and add available tools and metadata."
+              icon="🔗"
+              description="Provide an endpoint URL and authentication details. The Registry auto-detects available tools and metadata."
             />
             <RadioCard
               selected={recordSource === "define-manually"}
               onClick={() => setRecordSource("define-manually")}
               title="Define manually"
+              icon="✎"
               description="Manually specify the record definition, schema, and metadata. Use this for records without accessible endpoints."
             />
           </div>
@@ -440,110 +451,48 @@ function CreateRecord({
 
           <div className="mb-2 text-sm font-medium text-slate-700">Type</div>
           <div className="grid gap-4 md:grid-cols-2">
-            <RadioCard
-              selected={type === "MCP"}
-              onClick={() => setType("MCP")}
-              title="MCP"
-              description="Protocol designed for AI tool and agent communications."
-            />
-            <RadioCard
-              selected={type === "Agent"}
-              onClick={() => setType("Agent")}
-              title="Agent"
-              description="Protocol for secure agent-to-agent interactions."
-            />
-            <RadioCard
-              selected={type === "Agent skills"}
-              onClick={() => setType("Agent skills")}
-              title="Agent skills"
-              description="Register agent skills with markdown documentation and an optional structured definition."
-            />
-            <RadioCard
-              selected={type === "Custom"}
-              onClick={() => setType("Custom")}
-              title="Custom"
-              description="Custom protocol implementation. Define your own interface specification and integration requirements."
-            />
-            <RadioCard
-              selected={type === "Knowledge Base"}
-              onClick={() => setType("Knowledge Base")}
-              title="Knowledge Base"
-              description="A governed retrieval source (Bedrock KB, Databricks Vector Search, MongoDB Atlas, OpenSearch) agents reference for RAG."
-            />
+            <RadioCard selected={type === "MCP"} onClick={() => setType("MCP")} title="MCP" icon="⚡"
+              description="Protocol designed for AI tool and agent communications." />
+            <RadioCard selected={type === "Agent"} onClick={() => setType("Agent")} title="Agent" icon="◈"
+              description="Protocol for secure agent-to-agent interactions." />
+            <RadioCard selected={type === "Agent skills"} onClick={() => setType("Agent skills")} title="Agent skills" icon="✦"
+              description="Register agent skills with markdown documentation and an optional structured definition." />
+            <RadioCard selected={type === "Custom"} onClick={() => setType("Custom")} title="Custom" icon="⚙"
+              description="Custom protocol implementation. Define your own interface specification and integration requirements." />
+            <RadioCard selected={type === "Knowledge Base"} onClick={() => setType("Knowledge Base")} title="Knowledge Base" icon="🧠"
+              description="A governed retrieval source (Bedrock KB, Databricks Vector Search, MongoDB Atlas, OpenSearch) agents reference for RAG." />
           </div>
 
           <div className="mt-6 grid gap-4 md:grid-cols-2">
-            <Field
-              label="Record Name"
-              hint="Must start with a letter, only letters, numbers, and underscores (max 64 chars)."
-            >
-              <input
-                className="input"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="Leave empty to derive from URL"
-              />
+            <Field label="Record Name" hint="Must start with a letter, only letters, numbers, and underscores (max 64 chars).">
+              <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="Leave empty to derive from URL" />
             </Field>
-            <Field
-              label="Description (optional)"
-              hint="Short, human-readable summary shown in discovery and search results."
-            >
-              <input
-                className="input"
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                placeholder="AWS knowledge MCP server"
-              />
+            <Field label="Description (optional)" hint="Short, human-readable summary shown in discovery and search results.">
+              <input className="input" value={description} onChange={(e) => setDescription(e.target.value)} placeholder="AWS knowledge MCP server" />
             </Field>
           </div>
 
-          {recordSource === "synchronize-from-endpoint" && (
-            <>
-              <div className="mt-4">
-                <Field label="Endpoint" required hint="Must be a valid HTTPS URL.">
-                  <input
-                    className="input"
-                    value={endpoint}
-                    onChange={(e) => setEndpoint(e.target.value)}
-                    placeholder="https://knowledge-mcp.global.api.aws"
-                  />
-                </Field>
-              </div>
-              <div className="mt-6 text-sm font-medium text-slate-700">
-                Credential type
-              </div>
-              <div className="mt-2 space-y-3">
-                <RadioCard
-                  selected={credentialType === "IAM Role"}
-                  onClick={() => setCredentialType("IAM Role")}
-                  title="IAM Role"
-                  description="Authenticate using IAM role assumption with SigV4 signing."
+          {needsEndpoint && (
+            <div className="mt-4">
+              <Field label="Endpoint" required hint="Must be a valid HTTPS URL.">
+                <input
+                  className={`input ${endpoint && !endpointValid ? "border-red-400 focus:ring-red-100" : ""}`}
+                  value={endpoint}
+                  onChange={(e) => setEndpoint(e.target.value)}
+                  placeholder="https://knowledge-mcp.global.api.aws"
                 />
-                <RadioCard
-                  selected={credentialType === "OAuth client"}
-                  onClick={() => setCredentialType("OAuth client")}
-                  title="OAuth client"
-                  description="Authenticate using OAuth 2.0 client credentials."
-                />
-                <RadioCard
-                  selected={credentialType === "No authorization"}
-                  onClick={() => setCredentialType("No authorization")}
-                  title="No authorization"
-                  description="No authorization required. Use for public endpoints."
-                />
-              </div>
-            </>
+              </Field>
+              {endpoint && !endpointValid && (
+                <p className="mt-1 text-xs text-red-600">Endpoint must start with https://</p>
+              )}
+            </div>
           )}
 
           {recordSource === "define-manually" && !isKb && (
             <div className="mt-4">
               <Field label="MCP schema" hint="JSON with lambdaArn and toolSchema[].">
-                <textarea
-                  className="input mono h-56"
-                  value={schemaText}
-                  onChange={(e) => setSchemaText(e.target.value)}
-                  placeholder='{"name":"ExpenseTools","version":"1.0.0","lambdaArn":"arn:aws:lambda:…","toolSchema":[…]}'
-                />
+                <textarea className="input mono h-56" value={schemaText} onChange={(e) => setSchemaText(e.target.value)}
+                  placeholder='{"name":"ExpenseTools","version":"1.0.0","lambdaArn":"arn:aws:lambda:…","toolSchema":[…]}' />
               </Field>
             </div>
           )}
@@ -551,11 +500,7 @@ function CreateRecord({
           {isKb && (
             <div className="mt-4 space-y-4">
               <Field label="Vector / KB provider">
-                <select
-                  className="input"
-                  value={kbProvider}
-                  onChange={(e) => setKbProvider(e.target.value as KbProvider)}
-                >
+                <select className="input" value={kbProvider} onChange={(e) => setKbProvider(e.target.value as KbProvider)}>
                   <option>Bedrock Knowledge Base</option>
                   <option>Databricks Vector Search</option>
                   <option>MongoDB Atlas Vector Search</option>
@@ -563,86 +508,98 @@ function CreateRecord({
                   <option>Other Vector Store</option>
                 </select>
               </Field>
-              <Field
-                label="Connection"
-                hint={
-                  kbProvider === "Bedrock Knowledge Base"
-                    ? "Knowledge Base ID (e.g. KB1A2B3C4D)"
-                    : kbProvider === "Databricks Vector Search"
-                    ? "Index endpoint / index name (Unity Catalog governed)"
-                    : kbProvider === "MongoDB Atlas Vector Search"
-                    ? "Cluster URI"
-                    : "Endpoint / index"
-                }
-              >
-                <input
-                  className="input mono"
-                  value={kbConnection}
-                  onChange={(e) => setKbConnection(e.target.value)}
-                  placeholder={
-                    kbProvider === "Bedrock Knowledge Base"
-                      ? "KB1A2B3C4D"
-                      : "https://…"
-                  }
-                />
+              <Field label="Connection" hint={
+                kbProvider === "Bedrock Knowledge Base" ? "Knowledge Base ID (e.g. KB1A2B3C4D)"
+                : kbProvider === "Databricks Vector Search" ? "Index endpoint / index name (Unity Catalog governed)"
+                : kbProvider === "MongoDB Atlas Vector Search" ? "Cluster URI" : "Endpoint / index"}>
+                <input className="input mono" value={kbConnection} onChange={(e) => setKbConnection(e.target.value)}
+                  placeholder={kbProvider === "Bedrock Knowledge Base" ? "KB1A2B3C4D" : "https://…"} />
               </Field>
-              <div className="grid gap-4 md:grid-cols-2">
-                <Field label="Top K (chunks)">
-                  <input
-                    type="number"
-                    className="input"
-                    value={kbTopK}
-                    onChange={(e) => setKbTopK(Number(e.target.value))}
-                  />
-                </Field>
-                <div className="flex items-end">
-                  <p className="text-xs text-slate-500">
-                    Hybrid retrieval, citations on. The provider&apos;s native
-                    governance (Unity Catalog / Bedrock KB / index ACLs) enforces
-                    data access under the caller&apos;s identity.
-                  </p>
-                </div>
-              </div>
-              <div className="text-sm font-medium text-slate-700">
-                Credential type
-              </div>
-              <div className="space-y-3">
-                {(["IAM Role", "OAuth client", "API key", "No authorization"] as CredentialType[]).map(
-                  (c) => (
-                    <RadioCard
-                      key={c}
-                      selected={credentialType === c}
-                      onClick={() => setCredentialType(c)}
-                      title={c}
-                      description={
-                        c === "IAM Role"
-                          ? "SigV4 (Bedrock KB / AWS-native)."
-                          : c === "OAuth client"
-                          ? "OAuth 2.0 / SCIM-mapped (Databricks)."
-                          : c === "API key"
-                          ? "Secret from Secrets Manager (MongoDB/Pinecone)."
-                          : "Public endpoint."
-                      }
-                    />
-                  )
-                )}
-              </div>
+              <Field label="Top K (chunks)">
+                <input type="number" className="input w-32" value={kbTopK} onChange={(e) => setKbTopK(Number(e.target.value))} />
+              </Field>
+            </div>
+          )}
+        </section>
+
+        {/* Authentication — ALWAYS shown, consistent across every source/type */}
+        <section className="card p-6">
+          <h2 className="text-base font-semibold">Authentication</h2>
+          <p className="mb-4 text-sm text-slate-500">
+            How the gateway authenticates to this resource. The agent never sees
+            the credential — it is vended by AgentCore Identity.
+          </p>
+          <div className="grid gap-3 md:grid-cols-2">
+            <RadioCard selected={credentialType === "IAM Role"} onClick={() => setCredentialType("IAM Role")}
+              title="IAM Role" icon="🛡" description="IAM role assumption with SigV4 signing (AWS-native targets)." />
+            <RadioCard selected={credentialType === "OAuth client"} onClick={() => setCredentialType("OAuth client")}
+              title="OAuth client" icon="🔑" description="OAuth 2.0 client credentials (SaaS / third-party)." />
+            <RadioCard selected={credentialType === "API key"} onClick={() => setCredentialType("API key")}
+              title="API key" icon="🗝" description="Static key stored in AWS Secrets Manager." />
+            <RadioCard selected={credentialType === "No authorization"} onClick={() => setCredentialType("No authorization")}
+              title="No authorization" icon="🌐" description="No authorization required. Use for public endpoints." />
+          </div>
+
+          {/* Per-credential config */}
+          {credentialType === "IAM Role" && (
+            <div className="mt-4">
+              <Field label="IAM Role ARN (optional — defaults to the gateway execution role)">
+                <input className="input mono" value={iamRoleArn} onChange={(e) => setIamRoleArn(e.target.value)}
+                  placeholder="arn:aws:iam::123456789012:role/registry-target-role" />
+              </Field>
+            </div>
+          )}
+          {credentialType === "OAuth client" && (
+            <div className="mt-4 grid gap-4 md:grid-cols-2">
+              <Field label="Token URL">
+                <input className="input" value={oauthTokenUrl} onChange={(e) => setOauthTokenUrl(e.target.value)}
+                  placeholder="https://idp.example.com/oauth2/token" />
+              </Field>
+              <Field label="Client ID">
+                <input className="input" value={oauthClientId} onChange={(e) => setOauthClientId(e.target.value)} placeholder="client-id" />
+              </Field>
+              <Field label="Client secret (stored in the Token Vault, never exposed to the agent)">
+                <input className="input" type="password" value={oauthClientSecret} onChange={(e) => setOauthClientSecret(e.target.value)} placeholder="••••••••" />
+              </Field>
+            </div>
+          )}
+          {credentialType === "API key" && (
+            <div className="mt-4">
+              <Field label="Secrets Manager reference" hint="The key is read from Secrets Manager at invocation; it is never stored in the record.">
+                <input className="input mono" value={apiKeySecretRef} onChange={(e) => setApiKeySecretRef(e.target.value)}
+                  placeholder="arn:aws:secretsmanager:us-east-1:…:secret/registry/my-tool" />
+              </Field>
+            </div>
+          )}
+          {credentialType === "No authorization" && (
+            <div className="mt-4 rounded-lg bg-amber-50 p-3 text-xs text-amber-800">
+              Public endpoint — no credential is attached. Only use for genuinely
+              public resources (e.g. the AWS Knowledge MCP server).
             </div>
           )}
         </section>
       </div>
 
       {/* Sticky footer actions */}
-      <div className="fixed bottom-0 left-64 right-0 flex justify-end gap-2 border-t border-slate-200 bg-white px-8 py-4">
-        <button className="btn-ghost" onClick={onCancel}>
-          Cancel
-        </button>
-        <button className="btn-ghost" onClick={() => submit("draft")}>
-          Create as draft
-        </button>
-        <button className="btn-primary" onClick={() => submit("submit")}>
-          Create and submit for approval
-        </button>
+      <div className="fixed bottom-0 left-64 right-0 flex items-center justify-between gap-2 border-t border-slate-200 bg-white px-8 py-4">
+        <div className="text-xs text-slate-500">
+          {type} · {recordSource === "synchronize-from-endpoint" ? "Sync from endpoint" : "Define manually"} ·{" "}
+          Auth: <span className="font-medium text-slate-700">{credentialType}</span>
+          {needsEndpoint && !endpointValid && (
+            <span className="ml-2 text-red-600">— a valid HTTPS endpoint is required</span>
+          )}
+        </div>
+        <div className="flex gap-2">
+          <button className="btn-ghost" onClick={onCancel}>
+            Cancel
+          </button>
+          <button className="btn-ghost" disabled={!canSubmit} onClick={() => submit("draft")}>
+            Create as draft
+          </button>
+          <button className="btn-primary" disabled={!canSubmit} onClick={() => submit("submit")}>
+            Create and submit for approval
+          </button>
+        </div>
       </div>
     </>
   );

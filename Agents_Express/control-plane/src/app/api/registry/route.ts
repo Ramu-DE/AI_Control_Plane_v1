@@ -60,9 +60,9 @@ export async function POST(req: NextRequest) {
 
   // ---- Create Record (published into a registry, starts as Draft) ----
   if (body.kind === "record") {
-    if (!body.registryId || !body.name || !body.type || !body.recordSource) {
+    if (!body.registryId || !body.type || !body.recordSource) {
       return NextResponse.json(
-        { error: "registryId, name, type and recordSource are required" },
+        { error: "registryId, type and recordSource are required" },
         { status: 400 }
       );
     }
@@ -72,6 +72,30 @@ export async function POST(req: NextRequest) {
         { error: "registry not found" },
         { status: 404 }
       );
+    }
+
+    // Synchronize-from-endpoint records must carry a valid HTTPS endpoint.
+    if (body.recordSource === "synchronize-from-endpoint") {
+      if (!body.endpoint || !/^https:\/\//i.test(body.endpoint)) {
+        return NextResponse.json(
+          { error: "A valid HTTPS endpoint is required for synchronize-from-endpoint records." },
+          { status: 400 }
+        );
+      }
+    }
+
+    // Derive a record name from the endpoint host if not provided.
+    let name = body.name?.trim();
+    if (!name) {
+      if (body.endpoint) {
+        try {
+          name = new URL(body.endpoint).hostname.replace(/[^a-zA-Z0-9]+/g, "_");
+        } catch {
+          name = "record";
+        }
+      } else {
+        return NextResponse.json({ error: "name is required" }, { status: 400 });
+      }
     }
 
     let tools: string[] = [];
@@ -88,7 +112,7 @@ export async function POST(req: NextRequest) {
     const record: RegistryRecord = {
       id: newId("rec"),
       registryId: body.registryId,
-      name: body.name,
+      name,
       description: body.description ?? "",
       recordSource: body.recordSource,
       type: body.type,
