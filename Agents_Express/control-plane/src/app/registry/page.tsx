@@ -37,6 +37,9 @@ function parseKbConnection(
       return { endpoint: v, indexName: v };
     case "MongoDB Atlas Vector Search":
       return { clusterUri: v };
+    case "Qdrant":
+      // v is the cluster URL; collection is captured separately in the form.
+      return { qdrantUrl: v };
     case "OpenSearch":
       return { openSearchEndpoint: v };
     default:
@@ -263,8 +266,13 @@ function CreateRegistryModal({
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [autoApproval, setAutoApproval] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [localError, setLocalError] = useState<string | null>(null);
 
   async function create() {
+    if (submitting) return; // guard against double-submit
+    setLocalError(null);
+    setSubmitting(true);
     try {
       const reg = await sendJSON<Registry>("/api/registry", "POST", {
         kind: "registry",
@@ -274,8 +282,13 @@ function CreateRegistryModal({
       });
       onCreated(reg.id);
     } catch (e) {
-      onError((e as Error).message);
-      onClose();
+      // Keep the modal OPEN and show the error inline so the create can be
+      // retried without losing the typed values (previously the modal closed
+      // silently, which looked like "nothing happened").
+      const msg = (e as Error).message || "Failed to create registry.";
+      setLocalError(msg);
+      onError(msg);
+      setSubmitting(false);
     }
   }
 
@@ -286,16 +299,25 @@ function CreateRegistryModal({
       onClose={onClose}
       footer={
         <>
-          <button className="btn-ghost" onClick={onClose}>
+          <button className="btn-ghost" onClick={onClose} disabled={submitting}>
             Cancel
           </button>
-          <button className="btn-primary" disabled={!name} onClick={create}>
-            Create Registry
+          <button
+            className="btn-primary"
+            disabled={!name || submitting}
+            onClick={create}
+          >
+            {submitting ? "Creating…" : "Create Registry"}
           </button>
         </>
       }
     >
       <div className="space-y-4">
+        {localError && (
+          <div className="rounded-lg bg-red-50 px-4 py-2 text-sm text-red-700">
+            {localError}
+          </div>
+        )}
         <Field
           label="Registry Name"
           required
@@ -316,8 +338,8 @@ function CreateRegistryModal({
             placeholder="Catalog of agents, MCP servers, and tools approved for production use in AnyCompany"
           />
         </Field>
-        <div className="flex items-start justify-between rounded-lg border border-slate-200 p-3">
-          <div>
+        <div className="flex items-center justify-between gap-4 rounded-lg border border-slate-200 p-3">
+          <div className="min-w-0">
             <div className="text-sm font-medium">Auto-approve records</div>
             <div className="text-xs text-slate-500">
               When enabled, submitted records are approved automatically without
@@ -359,16 +381,39 @@ function CreateRecord({
   // Knowledge Base fields
   const [kbProvider, setKbProvider] = useState<KbProvider>("Bedrock Knowledge Base");
   const [kbConnection, setKbConnection] = useState("");
+  const [kbCollection, setKbCollection] = useState("");
   const [kbTopK, setKbTopK] = useState(5);
   const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
   const isKb = type === "Knowledge Base";
   const needsEndpoint = recordSource === "synchronize-from-endpoint";
   const endpointValid = !needsEndpoint || /^https:\/\/.+/i.test(endpoint.trim());
-  const canSubmit = endpointValid && (needsEndpoint || !!name.trim() || isKb);
+
+  // Human-readable reason the form can't be submitted yet (null = ready).
+  function validationMessage(): string | null {
+    if (needsEndpoint && !endpoint.trim())
+      return "Enter an HTTPS endpoint, or switch Record source to “Define manually”.";
+    if (needsEndpoint && !endpointValid)
+      return "The endpoint must be a valid URL starting with https://";
+    if (!needsEndpoint && !isKb && !name.trim())
+      return "Enter a Record Name (it can’t be derived without an endpoint).";
+    if (isKb && !kbConnection.trim())
+      return "Enter the Connection (e.g. the Qdrant cluster URL or Bedrock KB id).";
+    return null;
+  }
 
   async function submit(status: "draft" | "submit") {
     setError(null);
+    const vmsg = validationMessage();
+    if (vmsg) {
+      setError(vmsg);
+      // Scroll the error into view (the form can be long).
+      if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
+      return;
+    }
+    if (submitting) return;
+    setSubmitting(true);
     try {
       let mcpSchema: McpSchema | undefined;
       if (!isKb && recordSource === "define-manually" && schemaText.trim()) {
@@ -376,9 +421,14 @@ function CreateRecord({
       }
       let knowledgeConfig: KnowledgeConfig | undefined;
       if (isKb) {
+        const connection = parseKbConnection(kbProvider, kbConnection);
+        // Qdrant: attach the collection name alongside the cluster URL.
+        if (kbProvider === "Qdrant" && kbCollection.trim()) {
+          connection.qdrantCollection = kbCollection.trim();
+        }
         knowledgeConfig = {
           provider: kbProvider,
-          connection: parseKbConnection(kbProvider, kbConnection),
+          connection,
           retrieval: { topK: kbTopK, scoreThreshold: 0.4, mode: "hybrid", citations: true },
         };
       }
@@ -403,7 +453,10 @@ function CreateRecord({
       }
       onDone();
     } catch (e) {
-      setError((e as Error).message);
+      setError((e as Error).message || "Failed to create record. Please retry.");
+      if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
+    } finally {
+      setSubmitting(false);
     }
   }
 
@@ -504,6 +557,7 @@ function CreateRecord({
                   <option>Bedrock Knowledge Base</option>
                   <option>Databricks Vector Search</option>
                   <option>MongoDB Atlas Vector Search</option>
+                  <option>Qdrant</option>
                   <option>OpenSearch</option>
                   <option>Other Vector Store</option>
                 </select>
@@ -511,10 +565,21 @@ function CreateRecord({
               <Field label="Connection" hint={
                 kbProvider === "Bedrock Knowledge Base" ? "Knowledge Base ID (e.g. KB1A2B3C4D)"
                 : kbProvider === "Databricks Vector Search" ? "Index endpoint / index name (Unity Catalog governed)"
-                : kbProvider === "MongoDB Atlas Vector Search" ? "Cluster URI" : "Endpoint / index"}>
+                : kbProvider === "MongoDB Atlas Vector Search" ? "Cluster URI"
+                : kbProvider === "Qdrant" ? "Qdrant cluster URL (API key is vended by AgentCore Identity, never stored)"
+                : "Endpoint / index"}>
                 <input className="input mono" value={kbConnection} onChange={(e) => setKbConnection(e.target.value)}
-                  placeholder={kbProvider === "Bedrock Knowledge Base" ? "KB1A2B3C4D" : "https://…"} />
+                  placeholder={
+                    kbProvider === "Bedrock Knowledge Base" ? "KB1A2B3C4D"
+                    : kbProvider === "Qdrant" ? "https://<cluster-id>.<region>.aws.cloud.qdrant.io"
+                    : "https://…"} />
               </Field>
+              {kbProvider === "Qdrant" && (
+                <Field label="Collection" hint="Qdrant collection name the agent retrieves from.">
+                  <input className="input mono" value={kbCollection} onChange={(e) => setKbCollection(e.target.value)}
+                    placeholder="my_collection" />
+                </Field>
+              )}
               <Field label="Top K (chunks)">
                 <input type="number" className="input w-32" value={kbTopK} onChange={(e) => setKbTopK(Number(e.target.value))} />
               </Field>
@@ -585,19 +650,19 @@ function CreateRecord({
         <div className="text-xs text-slate-500">
           {type} · {recordSource === "synchronize-from-endpoint" ? "Sync from endpoint" : "Define manually"} ·{" "}
           Auth: <span className="font-medium text-slate-700">{credentialType}</span>
-          {needsEndpoint && !endpointValid && (
-            <span className="ml-2 text-red-600">— a valid HTTPS endpoint is required</span>
+          {validationMessage() && (
+            <span className="ml-2 text-amber-600">— {validationMessage()}</span>
           )}
         </div>
         <div className="flex gap-2">
-          <button className="btn-ghost" onClick={onCancel}>
+          <button className="btn-ghost" onClick={onCancel} disabled={submitting}>
             Cancel
           </button>
-          <button className="btn-ghost" disabled={!canSubmit} onClick={() => submit("draft")}>
-            Create as draft
+          <button className="btn-ghost" onClick={() => submit("draft")} disabled={submitting}>
+            {submitting ? "Saving…" : "Create as draft"}
           </button>
-          <button className="btn-primary" disabled={!canSubmit} onClick={() => submit("submit")}>
-            Create and submit for approval
+          <button className="btn-primary" onClick={() => submit("submit")} disabled={submitting}>
+            {submitting ? "Submitting…" : "Create and submit for approval"}
           </button>
         </div>
       </div>

@@ -3,7 +3,7 @@ import "./globals.css";
 import { Sidebar } from "@/components/Sidebar";
 
 export const metadata: Metadata = {
-  title: "AWS Agent Management Platform",
+  title: "Takeda Agent Management Platform",
   description:
     "Build and govern AI agents: registry, agents, policies, playground, model governance, and audit.",
 };

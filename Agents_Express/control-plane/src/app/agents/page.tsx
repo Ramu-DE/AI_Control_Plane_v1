@@ -263,7 +263,7 @@ function CreateAgentModal({
                     onClick={() => toggleTool(r.id)}
                     className={`badge border px-3 py-1 ${
                       form.toolRefs.includes(r.id)
-                        ? "border-slate-900 bg-slate-900 text-white"
+                        ? "border-brand-500 bg-brand-500 text-white"
                         : "border-slate-300 bg-white text-slate-600"
                     }`}
                   >
@@ -290,7 +290,7 @@ function CreateAgentModal({
                     onClick={() => toggleKb(r.id)}
                     className={`badge border px-3 py-1 ${
                       form.knowledgeRefs.includes(r.id)
-                        ? "border-slate-900 bg-slate-900 text-white"
+                        ? "border-brand-500 bg-brand-500 text-white"
                         : "border-slate-300 bg-white text-slate-600"
                     }`}
                   >

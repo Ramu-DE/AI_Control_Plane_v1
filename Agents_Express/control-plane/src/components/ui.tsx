@@ -138,15 +138,15 @@ export function RadioCard({
     >
       <span
         className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border ${
-          selected ? "border-slate-900" : "border-slate-300"
+          selected ? "border-brand-500" : "border-slate-300"
         }`}
       >
-        {selected && <span className="h-2 w-2 rounded-full bg-slate-900" />}
+        {selected && <span className="h-2 w-2 rounded-full bg-brand-500" />}
       </span>
       {icon && (
         <span
           className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-base ${
-            selected ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-500"
+            selected ? "bg-brand-500 text-white" : "bg-slate-100 text-slate-500"
           }`}
         >
           {icon}
@@ -217,7 +217,7 @@ export function Toggle({
       type="button"
       onClick={() => onChange(!on)}
       className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
-        on ? "bg-slate-900" : "bg-slate-300"
+        on ? "bg-brand-500" : "bg-slate-300"
       }`}
       aria-pressed={on}
     >

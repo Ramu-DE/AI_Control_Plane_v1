@@ -20,7 +20,7 @@ body {
   @apply inline-flex items-center justify-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium transition-colors;
 }
 .btn-primary {
-  @apply btn bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-40;
+  @apply btn bg-brand-500 text-white hover:bg-brand-600 disabled:opacity-40;
 }
 .btn-ghost {
   @apply btn border border-slate-300 bg-white text-slate-700 hover:bg-slate-50;
@@ -28,7 +28,7 @@ body {
 
 /* Inputs */
 .input {
-  @apply w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none placeholder:text-slate-400 focus:border-slate-900 focus:ring-2 focus:ring-slate-200;
+  @apply w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none placeholder:text-slate-400 focus:border-brand-500 focus:ring-2 focus:ring-brand-100;
 }
 .label {
   @apply mb-1.5 block text-sm font-medium text-slate-700;
@@ -46,7 +46,7 @@ body {
   @apply flex cursor-pointer gap-3 rounded-xl border bg-white p-4 transition-colors;
 }
 .radio-card-selected {
-  @apply border-slate-900 ring-1 ring-slate-900;
+  @apply border-brand-500 ring-1 ring-brand-500;
 }
 .radio-card-idle {
   @apply border-slate-200 hover:border-slate-300;
@@ -65,5 +65,5 @@ body {
   @apply flex items-center gap-3 rounded-lg px-3 py-2 text-sm text-slate-700 hover:bg-slate-100;
 }
 .nav-item-active {
-  @apply bg-slate-100 font-medium text-slate-900;
+  @apply bg-brand-50 font-medium text-brand-700;
 }

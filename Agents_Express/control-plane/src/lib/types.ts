@@ -83,6 +83,7 @@ export type KbProvider =
   | "Bedrock Knowledge Base"
   | "Databricks Vector Search"
   | "MongoDB Atlas Vector Search"
+  | "Qdrant"
   | "OpenSearch"
   | "Other Vector Store";
 
@@ -104,6 +105,10 @@ export interface KnowledgeConfig {
     database?: string;
     collection?: string;
     vectorIndex?: string;
+    // Qdrant (cluster URL + collection; API key is referenced, never stored)
+    qdrantUrl?: string;
+    qdrantClusterId?: string;
+    qdrantCollection?: string;
     // OpenSearch / generic
     openSearchEndpoint?: string;
     indexOrNamespace?: string;

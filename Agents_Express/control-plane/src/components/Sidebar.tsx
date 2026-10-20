@@ -88,8 +88,8 @@ export function Sidebar() {
     <aside className="flex w-64 shrink-0 flex-col border-r border-slate-200 bg-white">
       {/* Brand */}
       <div className="flex h-14 items-center gap-2 px-4">
-        <span className="rounded bg-slate-900 px-1.5 py-0.5 text-[10px] font-bold text-white">
-          aws
+        <span className="rounded bg-brand-500 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white">
+          Takeda
         </span>
         <span className="text-sm font-semibold">Agent Management Platform</span>
       </div>

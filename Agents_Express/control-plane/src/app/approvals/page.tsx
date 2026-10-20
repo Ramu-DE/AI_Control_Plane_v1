@@ -17,6 +17,7 @@ interface ApprovalItem {
 export default function ApprovalsPage() {
   const [items, setItems] = useState<ApprovalItem[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   async function load() {
     const d = await getJSON<{ items: ApprovalItem[] }>("/api/approvals");
@@ -29,6 +30,7 @@ export default function ApprovalsPage() {
   // Advance an item one step toward approval, or approve/reject outright.
   async function act(item: ApprovalItem, action: "submit" | "approve" | "reject") {
     setBusy(item.id);
+    setError(null);
     try {
       if (item.kind === "registry-record") {
         // Draft -> Pending approval -> Approved | Rejected
@@ -84,6 +86,8 @@ export default function ApprovalsPage() {
         }
       }
       await load();
+    } catch (e) {
+      setError((e as Error).message || "Action failed. Please retry.");
     } finally {
       setBusy(null);
     }
@@ -99,6 +103,11 @@ export default function ApprovalsPage() {
         subtitle="Everything awaiting review in one place — registry records and policies. Approve, reject, or submit for review."
       />
       <div className="px-8 pb-10">
+        {error && (
+          <div className="mb-4 rounded-lg bg-red-50 px-4 py-2 text-sm text-red-700">
+            {error}
+          </div>
+        )}
         <div className="mb-5 grid grid-cols-3 gap-4">
           {[
             ["Pending total", items.length],
