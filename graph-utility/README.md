@@ -1,0 +1,133 @@
+# Graph Utility — generic, multi-BU Ontology-Mediated Data Access (OMDA)
+
+A **reusable** utility that lets agents answer natural-language questions over a
+Business Unit's data **with precision**, by using a knowledge graph (ontology)
+as a *semantic map* and keeping the data in its system of record.
+
+Contract IQ (Market Access) is the **first tenant**. Add another BU tomorrow by
+adding one **GraphSource descriptor** + building its registry + pointing a
+serving endpoint — **no engine code changes**.
+
+> Built under `AgentControl/graph-utility/`. It does **not** modify the running
+> control-plane app. Endpoints (Databricks/Neptune) are config — drop them into
+> the descriptor when ready.
+
+---
+
+## The three planes
+
+| Plane | What | Where it runs |
+|---|---|---|
+| **Control** | register/govern/route each BU's Graph Source | **AgentControl** (Next.js + Bedrock) — see `docs/PHASE2_agentcontrol_provider.md` |
+| **Query** | generic engine: question → concepts → SQL/vector → answer | **Databricks Model Serving** (next to the data) — `serving.py` |
+| **Build** | ontology → mapping registry (auto) | **Databricks Job** today, Temporal-ready — `registry_build.py`, `jobs/build_registry_job.py` |
+
+**Rule:** compute follows data; governance is centralized. The engine runs where
+each BU's data lives; AgentControl is the single panel/router.
+
+---
+
+## Layout
+
+```
+graph-utility/
+├── README.md
+├── ARCHITECTURE.md
+├── requirements.txt
+├── pyproject.toml
+├── graph_sources/
+│   └── contract-iq.json            ← per-BU descriptor (endpoints as placeholders)
+├── src/graph_utility/
+│   ├── descriptor.py               ← GraphSource descriptor + registry (the seam)
+│   ├── backends.py                 ← BackendAdapter seam + Databricks UC adapter
+│   ├── engine.py                   ← generic OMDA engine (concepts + SQL)
+│   ├── serving.py                  ← MLflow pyfunc for Model Serving (routes by id)
+│   ├── ontology.py                 ← Neptune SPARQL client (schema only)
+│   └── registry_build.py           ← Temporal-ready build activities
+├── jobs/
+│   └── build_registry_job.py       ← Databricks Job entrypoint
+├── tests/
+│   ├── test_engine_offline.py      ← engine end-to-end with a mock backend
+│   └── test_registry_build_offline.py ← build activities with a fake ontology
+└── docs/
+    └── PHASE2_agentcontrol_provider.md
+```
+
+---
+
+## The seam: a GraphSource descriptor (per BU)
+
+Everything BU-specific is config. See `graph_sources/contract-iq.json`:
+
+```json
+{
+  "graph_source_id": "contract-iq",
+  "bu": "market-access",
+  "ontology": { "type": "neptune", "sparql_url": "…:8182/sparql",
+                "graph_uri": "…market_access_…", "namespace": "…/ma#" },
+  "backend":  { "type": "databricks-uc", "catalog": "usdev_corp",
+                "schema": "corp_us_mart",
+                "registry_table": "usdev_corp.corp_us_mart.omda_ontology_mapping",
+                "universal_join_key": "contract_key",
+                "vector_index": "…dbx_cc_sow_contract_chunk_index" },
+  "llm_endpoint": "databricks-meta-llama-3-3-70b-instruct",
+  "query_engine_url": "https://…/serving-endpoints/contract_iq_omda/invocations"
+}
+```
+
+---
+
+## Run the offline tests (no Databricks/Neptune needed)
+
+```bash
+cd graph-utility
+python3 tests/test_engine_offline.py            # engine: concepts → SQL → (mock) exec
+python3 tests/test_registry_build_offline.py    # build: ontology → mapping rows
+```
+
+Both make **no network calls** — they use a mock backend and a fake ontology so
+the logic is verifiable anywhere.
+
+---
+
+## Query path (once endpoints are set)
+
+1. Fill real values in `graph_sources/contract-iq.json` (Neptune `sparql_url`,
+   `role_arn`; Databricks `query_engine_url`).
+2. Deploy the engine to **Databricks Model Serving** via the MLflow pyfunc in
+   `serving.py` (see its module docstring for the `log_model` snippet).
+3. In AgentControl, register the Graph Source and route queries to it
+   (`docs/PHASE2_agentcontrol_provider.md`).
+
+A request to the serving endpoint:
+```json
+{"dataframe_records": [{"graph_source_id": "contract-iq",
+                        "question": "therapeutic area for contracts with supplier IQVIA",
+                        "limit": 50}]}
+```
+
+---
+
+## Build path (auto-registry from the ontology)
+
+```bash
+# On Databricks (cluster with Neptune VPC + assume-role):
+python jobs/build_registry_job.py --graph-source-id contract-iq \
+    --graph-sources-dir /dbfs/FileStore/graph_utility/graph_sources
+```
+Reads the Neptune ontology → derives mapping rows → idempotent MERGE into the
+registry table → smoke-tests → prints the descriptor to register in AgentControl.
+
+Use `--no-merge` to run fetch+derive+emit only (no Spark needed) for a dry check.
+
+---
+
+## Why this is "with precision"
+
+- Registry is **derived from the ontology** (not hand-typed) → faithful mappings.
+- Every request carries **`graph_source_id`** → never mixes BUs.
+- Concept extraction is **constrained to the registry** → no hallucinated columns.
+- **Join keys** come from the descriptor → correct SQL JOINs.
+- **Cedar** at AgentControl → only authorized agents/BUs reach a graph.
+
+See `ARCHITECTURE.md` for the full picture and the phased plan.

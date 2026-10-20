@@ -1,0 +1,17 @@
+# Graph Utility runtime deps.
+# The CORE engine + descriptor are stdlib-only (import anywhere).
+# These are needed only for the live query/build paths on Databricks.
+
+# Query/build on Databricks (provided by the Databricks runtime; pin if packaging):
+# pyspark>=3.5.0
+
+# Ontology access (Neptune SPARQL, SigV4 + STS):
+boto3>=1.34.0
+requests>=2.31.0
+
+# Serving wrapper (Databricks Model Serving):
+mlflow>=2.12.0
+pandas>=2.0.0
+
+# Vector Search (optional, unstructured path):
+# databricks-vectorsearch>=0.40

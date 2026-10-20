@@ -1,0 +1,32 @@
+{
+  "graph_source_id": "contract-iq",
+  "bu": "market-access",
+  "display_name": "Contract IQ (Market Access)",
+  "description": "Takeda contracts: ontology-mediated access over Unity Catalog, grounded with Neptune ontology and Vector Search.",
+  "ontology": {
+    "type": "neptune",
+    "sparql_url": "https://REPLACE-ME-neptune-endpoint:8182/sparql",
+    "graph_uri": "http://takeda.com/graph/dev/market_access_2b9d4439-4d0e-4c57-93e1-12bc2d13c014",
+    "namespace": "http://ontology.takeda.com/ontology/ma#",
+    "auth": "sigv4-assume-role",
+    "role_arn": "arn:aws:iam::REPLACE-ME-ACCOUNT:role/REPLACE-ME-NEPTUNE-ROLE",
+    "region": "us-east-1"
+  },
+  "backend": {
+    "type": "databricks-uc",
+    "catalog": "usdev_corp",
+    "schema": "corp_us_mart",
+    "registry_table": "usdev_corp.corp_us_mart.omda_ontology_mapping",
+    "universal_join_key": "contract_key",
+    "vector_index": "usdev_corp.corp_us_mart.dbx_cc_sow_contract_chunk_index",
+    "vector_endpoint": "vector_demo_new"
+  },
+  "llm_endpoint": "databricks-meta-llama-3-3-70b-instruct",
+  "query_engine_url": "https://REPLACE-ME-databricks-host/serving-endpoints/contract_iq_omda/invocations",
+  "tags": {
+    "region": "US",
+    "sensitivity": "confidential",
+    "tier": "pro"
+  },
+  "version": "1.0.0"
+}
