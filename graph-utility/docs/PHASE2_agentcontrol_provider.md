@@ -66,7 +66,12 @@ export interface GraphSourceConfig {
     catalog: string;
     schema: string;
     registryTable: string;      // fully-qualified mapping table
-    universalJoinKey: string;   // e.g. "contract_key"
+    // Legacy single-join-key seam for the databricks-uc engine ONLY. Required
+    // for that backend, OPTIONAL otherwise, and has NO default — a source must
+    // never inherit another tenant's join key. The precision build/plan path
+    // (graph-utility discovery → proposals → publish) derives joins from
+    // DISCOVERED keys per relationship and does not use this field.
+    universalJoinKey?: string;  // e.g. "contract_key" (this source's own key)
     vectorIndex?: string;
   };
   llmEndpoint: string;

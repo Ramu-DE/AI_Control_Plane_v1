@@ -118,3 +118,66 @@ per-BU artifacts. Two pluggable axes:
 - Did not hardcode endpoints/secrets (descriptor placeholders; STS/role at
   runtime; keys never stored).
 - Did not add other backends yet (seam is ready; UC only, per your stack).
+
+---
+
+## 8. Precision-first vertical slice (v0.2)
+
+### 8.1 The problem it fixes — "false precision"
+
+The v0.1 build plane produced a registry by GUESSING and then treated the
+guesses as authoritative:
+
+- `derive_mappings` snake-cased ontology local names into column names and
+  emitted them as real mappings (no validation against the actual schema);
+- a single `universal_join_key` (`contract_key`) was assumed for every join;
+- `SqlGenerator` inlined filter values into the SQL string (`ILIKE '%…%'`);
+- the Databricks vector path hardcoded ContractIQ columns.
+
+Each of these is *confident but unverified* — "false precision". The v0.2 slice
+removes it without deleting the legacy path (OMDAEngine stays for compatibility).
+
+### 8.2 Modules
+
+| Module | Responsibility |
+|---|---|
+| `discovery.py` | Typed, data-agnostic metadata (`TableMetadata`, `ColumnMetadata`, `KeyMetadata`, `JoinMetadata`) + bounded **masked** profiles (`ColumnProfile`, `TableProfile`). Composite keys supported. |
+| `data_adapter.py` | `DataAdapter` seam (discover + execute a **compiled** query). `InMemoryDataAdapter` is an offline fixture backend with a safe parameterized SELECT engine. |
+| `retriever.py` | Provider-neutral `Retriever` seam: `RetrievalRequest` → `Passage[]` via a descriptor-driven `FieldMapping`. `federate`/`dedupe`/`rrf_fuse`. `DatabricksVectorRetriever` (lazy SDK, never live in tests). |
+| `mapping.py` | `MappingProposal` (id, ontology URI/label/type, target asset/column, evidence[], confidence, validation issues, status, version, fingerprints). `propose_mappings`, `approve`/`reject`, `publish_mappings`, `to_r2rml`. |
+| `planner.py` | `SemanticQueryPlan` (`Projection`/`Filter`/`Aggregation`/`JoinPath`), `SemanticPlanner` (resolves only published mappings; fails closed), `SqlCompiler` → `CompiledQuery(sql, parameters)`. |
+
+### 8.3 Precision invariants (enforced + tested)
+
+1. **Name similarity may propose, never approve.** Name-only proposals are
+   confidence-capped (`NAME_SIMILARITY_MAX_CONFIDENCE`) and carry a
+   `name-similarity-only` review warning.
+2. **No universal join key in the new path.** Joins come only from discovered
+   keys or ontology relationships; the planner refuses to connect tables it
+   can't join and never assumes a shared key.
+3. **Approval + publish gate.** Every proposal in the publication scope must
+   have a human decision with reviewer + note. Undecided rows block; rejected
+   rows are excluded; approved rows with blocking issues block; at least one
+   approved+valid mapping is required.
+4. **Fail closed in planning.** Unmapped concept → `UnmappedConceptError`;
+   multiple target columns for one concept → `AmbiguousConceptError`; aggregate
+   on a non-numeric column → `PlanningError`; many-to-many fanout → `PlanningError`.
+5. **Safe compilation.** Identifiers validated against `^[A-Za-z_]\w*$` and
+   double-quoted; all values bound to **named parameters** (`:p0`…), never
+   inlined; `LIMIT` clamped to `[1, MAX_LIMIT]`.
+6. **Bounded, masked profiling.** A profile never carries more than
+   `MAX_SAMPLE_VALUES` samples, and every sample is a non-reversible masked
+   token — no raw PII/business value is ever stored or logged.
+7. **Provenance.** Proposals and published mappings carry source + proposal
+   fingerprints, approver, and decision time; the R2RML artifact propagates them.
+
+### 8.4 Implemented offline vs production
+
+Everything above is implemented and **verified entirely offline** with
+`InMemoryDataAdapter` / `InMemoryRetriever` and two structurally different
+fixtures (ContractIQ-style and a clinical-trials schema with a composite PK and
+a many-to-many relationship). AgentControl persistence is implemented through
+local and lazy DynamoDB stores. Remaining production integrations are a live
+UC/warehouse `DataAdapter`, Databricks build callbacks, live
+`DatabricksVectorRetriever`, and Turtle publication/loading. No live calls are
+made by the test suite. See the README table.

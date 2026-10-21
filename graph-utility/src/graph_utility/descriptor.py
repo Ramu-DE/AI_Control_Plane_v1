@@ -52,9 +52,20 @@ class BackendSource:
     catalog: Optional[str] = None
     schema: Optional[str] = None
     registry_table: Optional[str] = None       # fully-qualified mapping table
-    universal_join_key: str = "contract_key"   # default join key for this source
+    # Legacy single-join-key seam for the databricks-uc engine ONLY. The
+    # precision build/plan path derives joins from DISCOVERED keys per
+    # relationship and does NOT use this field. It is intentionally EMPTY by
+    # default — a generic BU must set it explicitly if (and only if) it relies
+    # on the legacy universal-join-key engine. It must never silently inherit
+    # another tenant's join key.
+    universal_join_key: str = ""
     vector_index: Optional[str] = None         # Databricks Vector Search index
     vector_endpoint: Optional[str] = None
+    # Descriptor-driven vector field mapping (replaces any hardcoded columns).
+    # When unset, the adapter returns no columns rather than assuming a schema.
+    vector_text_field: Optional[str] = None          # normalized text column
+    vector_id_field: Optional[str] = None            # normalized id column
+    vector_metadata_fields: list = field(default_factory=list)  # passthrough columns
     # Generic/future backends
     endpoint: Optional[str] = None             # e.g. Qdrant cluster URL
     collection: Optional[str] = None
@@ -139,6 +150,14 @@ class GraphSource:
             for fld in ("catalog", "schema", "registry_table"):
                 if not getattr(self.backend, fld):
                     errs.append(f"backend.{fld} is required for type 'databricks-uc'")
+            # The legacy databricks-uc engine builds JOINs from this single key,
+            # so it must be supplied explicitly. There is NO default — inheriting
+            # another tenant's join key would silently produce wrong rows.
+            if not self.backend.universal_join_key:
+                errs.append(
+                    "backend.universal_join_key is required for type 'databricks-uc' "
+                    "(no default: set this source's own join key)"
+                )
         elif self.backend.type in ("qdrant", "bedrock-kb", "warehouse"):
             # Seam for future backends — only shape-check minimally for now.
             if not self.backend.registry_table and self.backend.type == "warehouse":

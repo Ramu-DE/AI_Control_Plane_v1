@@ -33,7 +33,7 @@ const EMPTY_SOURCE: GraphSourceConfig = {
     catalog: "",
     schema: "",
     registryTable: "",
-    universalJoinKey: "contract_key",
+    universalJoinKey: "",
   },
   llmEndpoint: "",
   queryEngineUrl: "",
@@ -244,6 +244,8 @@ export default function GraphSourcesPage() {
             </div>
           </section>
         )}
+
+        {selected && <MappingPanel graphSourceId={selected.graphSourceId} />}
       </div>
 
       {showRegister && (
@@ -262,6 +264,7 @@ function Detail({ label, value }: { label: string; value: string }) {
 
 function RegisterModal({ onClose, onCreated }: { onClose: () => void; onCreated: () => Promise<void> }) {
   const [source, setSource] = useState(EMPTY_SOURCE);
+  const [allowedHostsText, setAllowedHostsText] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const patch = (values: Partial<GraphSourceConfig>) => setSource((current) => ({ ...current, ...values }));
@@ -271,7 +274,14 @@ function RegisterModal({ onClose, onCreated }: { onClose: () => void; onCreated:
   async function register() {
     setBusy(true); setError("");
     try {
-      await sendJSON("/api/graph", "POST", { op: "register", source });
+      // Split the comma/space/newline-separated allowed-host list into an
+      // allowlist. A configured (non-placeholder) queryEngineUrl requires a
+      // non-empty allowlist that matches its hostname (enforced server-side).
+      const allowedHosts = allowedHostsText
+        .split(/[\s,]+/)
+        .map((h) => h.trim())
+        .filter(Boolean);
+      await sendJSON("/api/graph", "POST", { op: "register", source: { ...source, allowedHosts } });
       await onCreated();
     } catch (e) {
       setError((e as Error).message); setBusy(false);
@@ -302,7 +312,314 @@ function RegisterModal({ onClose, onCreated }: { onClose: () => void; onCreated:
         <Field label="Universal join key" required><input className="input" value={source.backend.universalJoinKey} onChange={(e) => backend({ universalJoinKey: e.target.value })} /></Field>
         <Field label="LLM endpoint" required><input className="input" value={source.llmEndpoint} onChange={(e) => patch({ llmEndpoint: e.target.value })} /></Field>
         <Field label="Query engine URL" hint="May be left empty for preview-only setup."><input className="input" value={source.queryEngineUrl} onChange={(e) => patch({ queryEngineUrl: e.target.value })} placeholder="https://…/serving-endpoints/…/invocations" /></Field>
+        <Field label="Allowed serving hosts" hint="Required when a live (non-placeholder) query engine URL is set. Comma- or space-separated hostnames, e.g. ws.databricks.com"><input className="input" value={allowedHostsText} onChange={(e) => setAllowedHostsText(e.target.value)} placeholder="ws.databricks.com" /></Field>
       </div>
     </Modal>
+  );
+}
+
+// --------------------------------------------------------------------------- //
+// Mapping / build governance panel
+// --------------------------------------------------------------------------- //
+
+interface BuildRunView {
+  buildRunId: string;
+  status: string;
+  trigger: string;
+  startedAt: string;
+  message?: string;
+  stats?: Record<string, number>;
+}
+interface ProposalView {
+  proposalId: string;
+  buildRunId: string;
+  status: string;
+  ontologyLabel: string;
+  ontologyUri: string;
+  entityType: string;
+  ucTable?: string;
+  ucColumn?: string | null;
+  confidence: number;
+  evidence: { kind: string; detail: string }[];
+  issues: { severity: string; code: string; message: string }[];
+  decision?: { reviewer: string; note: string; decidedAt: string };
+}
+interface VersionView {
+  mappingVersionId: string;
+  version: number;
+  status: string;
+  proposalIds: string[];
+  publishedBy: string;
+  publishedAt: string;
+}
+interface MappingData {
+  graphSourceId: string;
+  buildRuns: BuildRunView[];
+  proposals: ProposalView[];
+  versions: VersionView[];
+}
+
+function MappingPanel({ graphSourceId }: { graphSourceId: string }) {
+  const [data, setData] = useState<MappingData | null>(null);
+  const [selected, setSelected] = useState<Record<string, boolean>>({});
+  const [reviewer, setReviewer] = useState("");
+  const [note, setNote] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [activeBuild, setActiveBuild] = useState<string>("");
+
+  async function load() {
+    try {
+      const next = await getJSON<MappingData>(
+        `/api/graph/mappings?graphSourceId=${encodeURIComponent(graphSourceId)}`
+      );
+      setData(next);
+      setActiveBuild((cur) => cur || next.buildRuns[0]?.buildRunId || "");
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  useEffect(() => {
+    setSelected({});
+    setActiveBuild("");
+    load().catch((e: Error) => setError(e.message));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [graphSourceId]);
+
+  const proposals = useMemo(
+    () => (data?.proposals ?? []).filter((p) => !activeBuild || p.buildRunId === activeBuild),
+    [data, activeBuild]
+  );
+  const selectedIds = Object.keys(selected).filter((id) => selected[id]);
+
+  async function decide(decision: "approved" | "rejected") {
+    setError("");
+    if (!reviewer.trim() || !note.trim()) {
+      setError("Reviewer and note are required to approve or reject.");
+      return;
+    }
+    if (selectedIds.length === 0) {
+      setError("Select at least one proposal.");
+      return;
+    }
+    setBusy(true);
+    try {
+      await sendJSON("/api/graph/mappings", "POST", {
+        op: "decide",
+        proposalIds: selectedIds,
+        decision,
+        reviewer,
+        note,
+      });
+      setSelected({});
+      setNote("");
+      await load();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function publish() {
+    setError("");
+    if (!activeBuild) {
+      setError("No build run selected to publish.");
+      return;
+    }
+    setBusy(true);
+    try {
+      await sendJSON("/api/graph/mappings", "POST", {
+        op: "publish",
+        graphSourceId,
+        buildRunId: activeBuild,
+        publishedBy: reviewer || "console-user",
+      });
+      await load();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const hasBuilds = (data?.buildRuns.length ?? 0) > 0;
+  // Mirror evaluatePublishGate: every proposal must be DECIDED (no 'proposed'),
+  // no approved proposal may carry a blocking/error issue, and at least one
+  // approved+valid proposal must exist. Rejected proposals are a completed
+  // decision that is excluded from the published output (they do not block).
+  const isBlocking = (sev: string) => sev === "blocking" || sev === "error";
+  const undecidedCount = proposals.filter((p) => p.status === "proposed").length;
+  const approvedValid = proposals.filter(
+    (p) => p.status === "approved" && !p.issues.some((i) => isBlocking(i.severity))
+  );
+  const approvedInvalidCount = proposals.filter(
+    (p) => p.status === "approved" && p.issues.some((i) => isBlocking(i.severity))
+  ).length;
+  const canPublish =
+    proposals.length > 0 &&
+    undecidedCount === 0 &&
+    approvedInvalidCount === 0 &&
+    approvedValid.length > 0;
+  const publishHint = canPublish
+    ? `Publish ${approvedValid.length} approved mapping(s); rejected proposals are excluded.`
+    : undecidedCount > 0
+      ? `${undecidedCount} proposal(s) still undecided — approve or reject every proposal first.`
+      : approvedInvalidCount > 0
+        ? `${approvedInvalidCount} approved proposal(s) have blocking issues.`
+        : "At least one approved, valid proposal is required to publish.";
+
+  return (
+    <section className="card p-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-base font-semibold">Mapping build &amp; approval</h2>
+          <p className="mt-0.5 text-sm text-slate-500">
+            Review ontology→backend mappings derived by the build plane. Approve or reject with a
+            mandatory note, then publish an immutable mapping version once all are approved.
+          </p>
+        </div>
+      </div>
+
+      {error && <div className="mt-4 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
+
+      {!hasBuilds ? (
+        <div className="mt-6 rounded-xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center text-sm text-slate-500">
+          No build runs recorded for this source yet. Live discovery is not performed here — a
+          build run is created by the build plane (graph-utility) and its proposals appear here for
+          governance.
+        </div>
+      ) : (
+        <>
+          <div className="mt-5 flex flex-wrap gap-2">
+            {data!.buildRuns.map((run) => (
+              <button
+                key={run.buildRunId}
+                type="button"
+                onClick={() => { setActiveBuild(run.buildRunId); setSelected({}); }}
+                className={`rounded-lg border px-3 py-2 text-left text-xs ${activeBuild === run.buildRunId ? "border-brand-500 ring-1 ring-brand-500" : "border-slate-200 hover:border-slate-300"}`}
+              >
+                <div className="flex items-center gap-2">
+                  <span className="mono">{run.buildRunId}</span>
+                  <Pill status={run.status} />
+                </div>
+                <div className="mt-1 text-slate-400">{run.trigger} · {new Date(run.startedAt).toLocaleString()}</div>
+              </button>
+            ))}
+          </div>
+
+          <div className="mt-5 overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead className="border-b border-slate-200 text-xs uppercase text-slate-400">
+                <tr>
+                  <th className="py-2 pr-2"></th>
+                  <th className="py-2 pr-3">Mapping</th>
+                  <th className="py-2 pr-3">Target</th>
+                  <th className="py-2 pr-3">Confidence</th>
+                  <th className="py-2 pr-3">Issues</th>
+                  <th className="py-2 pr-3">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {proposals.map((p) => {
+                  const blocking = p.issues.some((i) => i.severity === "blocking" || i.severity === "error");
+                  return (
+                    <tr key={p.proposalId} className="border-b border-slate-100 align-top">
+                      <td className="py-2 pr-2">
+                        <input
+                          type="checkbox"
+                          checked={!!selected[p.proposalId]}
+                          disabled={p.status !== "proposed"}
+                          onChange={(e) => setSelected((cur) => ({ ...cur, [p.proposalId]: e.target.checked }))}
+                        />
+                      </td>
+                      <td className="py-2 pr-3">
+                        <div className="font-medium text-slate-800">{p.ontologyLabel}</div>
+                        <div className="mono text-xs text-slate-400">{p.ontologyUri}</div>
+                        {p.evidence.length > 0 && (
+                          <ul className="mt-1 list-disc pl-4 text-xs text-slate-500">
+                            {p.evidence.slice(0, 3).map((ev, i) => (
+                              <li key={i}><span className="font-medium">{ev.kind}:</span> {ev.detail}</li>
+                            ))}
+                          </ul>
+                        )}
+                        {p.decision && (
+                          <div className="mt-1 text-xs text-slate-500">
+                            Reviewed by {p.decision.reviewer}: “{p.decision.note}”
+                          </div>
+                        )}
+                      </td>
+                      <td className="py-2 pr-3 text-xs text-slate-600">
+                        <div className="mono">{p.ucTable ?? "—"}</div>
+                        <div className="mono text-slate-400">{p.ucColumn ?? (p.entityType === "class" ? "(class)" : "—")}</div>
+                      </td>
+                      <td className="py-2 pr-3">
+                        <span className={`font-medium ${p.confidence >= 0.8 ? "text-green-700" : p.confidence >= 0.5 ? "text-amber-700" : "text-red-700"}`}>
+                          {(p.confidence * 100).toFixed(0)}%
+                        </span>
+                      </td>
+                      <td className="py-2 pr-3 text-xs">
+                        {p.issues.length === 0 ? (
+                          <span className="text-slate-400">none</span>
+                        ) : (
+                          <ul className="space-y-0.5">
+                            {p.issues.map((iss, i) => (
+                              <li key={i} className={iss.severity === "blocking" || iss.severity === "error" ? "text-red-700" : iss.severity === "warning" ? "text-amber-700" : "text-slate-500"}>
+                                {iss.severity}: {iss.message}
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                        {blocking && <div className="mt-0.5 text-[11px] font-medium text-red-700">blocks publish</div>}
+                      </td>
+                      <td className="py-2 pr-3"><Pill status={p.status} /></td>
+                    </tr>
+                  );
+                })}
+                {proposals.length === 0 && (
+                  <tr><td colSpan={6} className="py-6 text-center text-sm text-slate-400">No proposals in this build run.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="mt-5 grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4 sm:grid-cols-2">
+            <Field label="Reviewer" required>
+              <input className="input" value={reviewer} onChange={(e) => setReviewer(e.target.value)} placeholder="jane.doe@corp" />
+            </Field>
+            <Field label="Decision note" required>
+              <input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Rationale (mandatory)" />
+            </Field>
+            <div className="sm:col-span-2 flex flex-wrap items-center gap-2">
+              <button className="btn-primary" disabled={busy || selectedIds.length === 0} onClick={() => decide("approved")}>
+                Approve selected ({selectedIds.length})
+              </button>
+              <button className="btn-ghost" disabled={busy || selectedIds.length === 0} onClick={() => decide("rejected")}>
+                Reject selected
+              </button>
+              <div className="flex-1" />
+              <button className="btn-primary" disabled={busy || !canPublish} onClick={publish} title={publishHint}>
+                Publish mapping version
+              </button>
+            </div>
+          </div>
+
+          {(data!.versions.length > 0) && (
+            <div className="mt-5">
+              <h3 className="text-sm font-semibold">Published mapping versions</h3>
+              <ul className="mt-2 space-y-1 text-sm">
+                {data!.versions.map((v) => (
+                  <li key={v.mappingVersionId} className="flex items-center gap-3">
+                    <span className="badge bg-green-50 text-green-700">v{v.version}</span>
+                    <span className="text-slate-500">{v.proposalIds.length} mappings · by {v.publishedBy} · {new Date(v.publishedAt).toLocaleString()}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </>
+      )}
+    </section>
   );
 }

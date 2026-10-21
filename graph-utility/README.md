@@ -132,3 +132,88 @@ Use `--no-merge` to run fetch+derive+emit only (no Spark needed) for a dry check
 - **Cedar** at AgentControl → only authorized agents/BUs reach a graph.
 
 See `ARCHITECTURE.md` for the full picture and the phased plan.
+
+---
+
+## Precision-first vertical slice (v0.2) — approval-gated, no guessed mappings
+
+The original path above DERIVES a registry from the ontology and treats the
+guesses as truth (a universal join key, name-guessed columns, inlined filter
+values). The **precision-first** modules replace that with an honest,
+review-gated pipeline. **Both layers coexist**; the legacy `OMDAEngine` and its
+public API are unchanged.
+
+```
+DataAdapter.discover()                → typed metadata + bounded MASKED profiles
+        │                               (tables, columns, keys, joins — no PII)
+        ▼
+propose_mappings(discovery, ontology) → MappingProposal[]  (status=proposed)
+        │   name-similarity may PROPOSE but NEVER approve
+        │   ontology relationships → relationship/JOIN proposals (from real keys)
+        ▼
+approve(p) / reject(p)                → explicit, human-gated; approve requires
+        │                               a non-blank approver AND note, and fails
+        │                               closed on blocking validation issues
+        ▼
+publish_mappings(...)                 → PublishedMappingSet (runtime registry)
+        │   ALL supplied proposals must be decided; rejected rows are excluded;
+        │   at least one approved+valid row is required. DIRECT mappings
+        │   carry the DISCOVERED logical_type; CLASS mappings carry the class
+        │   URI + discovered primary-key subject columns.
+        │   + to_r2rml(...) R2RML artifact whose subject templates come from the
+        │     published class's discovered subject key + class URI (NO fabricated
+        │     __pk__; a direct mapping without a published keyed class for its
+        │     table fails closed / is omitted with an explicit error).
+        ▼
+SemanticPlanner(published).plan(...)  → SemanticQueryPlan (fail-closed on
+        │                               unmapped / ambiguous / bad operator /
+        │                               many-to-many fanout; NO universal key).
+        │   SUM/AVG and ILIKE are validated against the DISCOVERED logical_type
+        │   ONLY — never the column name. The plan carries mapping_version +
+        │   set_fingerprint provenance.
+        ▼
+SqlCompiler().compile(plan)           → CompiledQuery(sql, parameters)
+        │   quoted+validated identifiers; NAMED params (never inlined);
+        │   clamped LIMIT
+        ▼
+DataAdapter.execute(sql, parameters)  → typed rows
+```
+
+Retrieval is a **separate, provider-neutral seam** (`Retriever`): a
+`RetrievalRequest` returns normalized `Passage` objects via a **descriptor-driven
+`FieldMapping`** (no hardcoded ContractIQ columns). `federate` / `dedupe` /
+`rrf_fuse` combine multiple retrievers. The `DatabricksVectorRetriever` is
+descriptor-driven and imports its SDK lazily — **never called in tests**.
+
+### What is IMPLEMENTED (offline, verifiable) vs PRODUCTION integrations
+
+| Capability | Offline (in this repo, tested) | Production integration (NOT in tests) |
+|---|---|---|
+| Discovery + profiling | `InMemoryDataAdapter` (fixtures) | real UC/warehouse `DataAdapter` |
+| Masked bounded profiles | ✅ `discovery.ColumnProfile` (cap + mask) | same contract over live samples |
+| Mapping proposals | ✅ `propose_mappings` (name sim + type + keys) | + LLM-assisted evidence (pluggable) |
+| Approval / publish gate | ✅ mandatory reviewer/note; undecided blocks; rejected excludes | DynamoDB AgentControl store implemented; Databricks build callback remains |
+| R2RML artifact | ✅ `to_r2rml` (dict form + provenance) | emit turtle / load into a mapper |
+| Semantic plan + compile | ✅ `SemanticPlanner` + `SqlCompiler` | execute on Databricks SQL |
+| Query execution | ✅ `InMemoryDataAdapter.execute` (safe subset) | Spark / JDBC execution |
+| Retrieval | ✅ `InMemoryRetriever` (lexical) | `DatabricksVectorRetriever` (lazy SDK) |
+| Federation / dedupe / RRF | ✅ pure helpers | same helpers over live retrievers |
+
+**No live AWS/Databricks/Neptune calls** are made by any test. Provider classes
+import their SDKs lazily and are exercised only through fixtures.
+
+### Run the precision-first offline tests
+
+```bash
+cd graph-utility
+python3 tests/test_precision_offline.py   # discovery, proposals, approval gate,
+                                           # planner fail-closed, injection,
+                                           # joins (composite FK), retrieval
+```
+
+A structurally different **clinical-trials** fixture
+(`tests/fixtures_clinical.py`) — composite primary key, many-to-many
+trial↔investigator via a junction table, and **no universal join key** — proves
+the precision path carries **no ContractIQ assumptions** (tests assert the
+ContractIQ column/table names never appear in discovery, proposals, or compiled
+SQL).

@@ -112,8 +112,18 @@ class DatabricksUCAdapter(BackendAdapter):
             return []
         try:
             index = self._get_index()
-            columns = ["chunk_text", "file_name", "contract_type", "region", "business_unit"]
-            kwargs = {"query_text": query, "columns": columns, "num_results": num_results}
+            # Descriptor-driven columns — NO hardcoded ContractIQ schema. If the
+            # descriptor doesn't declare vector fields, request none (the index
+            # returns its defaults) rather than assuming a particular schema.
+            bk = self.source.backend
+            columns = [c for c in (
+                [bk.vector_id_field] if bk.vector_id_field else []
+            ) + (
+                [bk.vector_text_field] if bk.vector_text_field else []
+            ) + list(bk.vector_metadata_fields or []) if c]
+            kwargs = {"query_text": query, "num_results": num_results}
+            if columns:
+                kwargs["columns"] = columns
             if filters:
                 kwargs["filters"] = filters
             res = index.similarity_search(**kwargs)

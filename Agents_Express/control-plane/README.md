@@ -118,6 +118,96 @@ and Policies pages also show an **AWS / Local** badge that links there.
 See `.env.example` for all variables. Base-path (`/agent-control`) compatibility
 is preserved — set `BASE_PATH` and `NEXT_PUBLIC_BASE_PATH` together.
 
+## Graph control plane (sources, build runs, mappings, approvals)
+
+The **Graph Sources** page (`/graph`) and its API (`/api/graph`,
+`/api/graph/mappings`) govern ontology-mediated data access. A GraphSource is
+registered, walks the approval lifecycle, and can be queried (policy-checked)
+through an OMDA serving endpoint. On top of that, the **build plane**
+(`graph-utility`) derives ontology→backend mappings; those arrive here as
+**MappingProposals** with confidence, evidence, and validation issues, are
+approved/rejected by a reviewer (mandatory reviewer + note). Publication
+requires every proposal to be decided, excludes rejected proposals, blocks
+approved-invalid proposals, and requires at least one approved-valid proposal
+before an immutable **MappingVersion** can be published.
+
+### Store selection (fail-closed)
+
+Persistence is behind the async `GraphControlStore` interface with two
+back-ends, selected by `GRAPH_CONTROL_STORE`:
+
+| Value | Store | Notes |
+|---|---|---|
+| `local` (default) | `LocalGraphControlStore` | In-memory, no AWS, no network — offline + tests. |
+| `dynamodb` | `DynamoDbGraphControlStore` | Single-table adapter with conditional writes. |
+
+Misconfiguration **fails closed** — the app never silently falls back to a
+different store. No table is created and **no network call is made at module
+import**; the DynamoDB client is built lazily on first use.
+
+### DynamoDB deployment prerequisites
+
+Provision these out-of-band (the app does not create them):
+
+- A DynamoDB table named by `GRAPH_CONTROL_TABLE` with:
+  - Primary key: `PK` (HASH, String), `SK` (RANGE, String)
+  - GSI `GSI1`: `GSI1PK` (HASH), `GSI1SK` (RANGE) — tenant-scoped queries
+  - GSI `GSI2`: `GSI2PK` (HASH), `GSI2SK` (RANGE) — status-scoped queries
+- `AWS_REGION` or `AWS_DEFAULT_REGION` (no hardcoded fallback).
+- Credentials via the SDK default provider chain only.
+
+Single-table key layout:
+
+```
+PK = GS#<graphSourceId>   SK = META            -> GraphSource
+PK = GS#<graphSourceId>   SK = BR#<buildRunId> -> BuildRun
+PK = GS#<graphSourceId>   SK = PR#<proposalId> -> MappingProposal
+PK = GS#<graphSourceId>   SK = MV#<version>    -> MappingVersion
+GSI1PK = T#<tenantId>     GSI2PK = <Entity>#<status>
+```
+
+### Security
+
+- **No credentials are stored** — only connection/secret *references*
+  (`SecretRef`, `ConnectionRef` with role ARNs / secret ARNs). Auth is resolved
+  at runtime.
+- **SSRF defenses**: outbound serving/ontology URLs must be HTTPS and must not
+  target private/loopback/link-local/metadata (`169.254.169.254`) hosts. A live
+  `queryEngineUrl` additionally requires a non-empty matching `allowedHosts`
+  allowlist; placeholders remain available for routing preview only.
+- **Optimistic concurrency**: every write is a conditional write on a `rev`
+  token; a lost race returns a `409` (`VERSION_CONFLICT`).
+- **Honest UI**: the `/graph` build panel does **not** fake live discovery — if
+  no build run exists it says so; proposals only appear when the build plane
+  records them.
+- **Published mapping pinning**: routing preview works before publication, but a
+  live graph query returns `MAPPING_NOT_PUBLISHED` until a MappingVersion exists.
+  Serving requests carry its id, version, and checksum so the data plane can
+  verify the exact approved mapping artifact before planning SQL.
+
+### Cross-track mapping semantics (build plane ↔ control plane)
+
+The `graph-utility` build plane (Python) and this control plane share one
+mapping vocabulary so proposals cross the boundary losslessly:
+
+- **Proposal status** — `proposed | approved | rejected` on both sides.
+- **Validation severity** — a publish-blocking issue is `"blocking"` here and
+  `"error"` in `graph-utility`; **both** are treated as blocking by the publish
+  gate, so a build-plane invalid proposal can never slip through.
+- **Evidence** — the control plane accepts the build plane's evidence kinds
+  (`name-similarity`, `type-compatibility`, `ontology-relationship`,
+  `key-metadata`, `profile`) and their `weight` verbatim, alongside its own.
+- **Published artifact reference** — a `MappingVersion.artifactRef.checksum`
+  (`sha256:…`) is a content-addressed reference to *which* proposals were
+  published (ids + version), mirroring `graph-utility`'s
+  `PublishedMappingSet.set_fingerprint`. It references the artifact, never the
+  data.
+- **`universalJoinKey`** — a **legacy** single-join-key seam for the
+  `databricks-uc` engine only: required for that backend, optional otherwise,
+  and with **no default** (a source never inherits another tenant's join key).
+  The precision build/plan path derives joins from discovered keys per
+  relationship and does not use it.
+
 ## The two-layer authorization model (Part 3 + 4)
 
 Authorization is enforced in two layers, both written in **Cedar**:
