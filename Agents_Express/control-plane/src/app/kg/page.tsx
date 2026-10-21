@@ -3,8 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { PageHeader, Field, EmptyState, Pill } from "@/components/ui";
 import { getJSON, sendJSON } from "@/lib/api";
-import { forceLayout, ringFor } from "@/lib/kg/layout";
-import type { KgEdge, KgGraph, KgNode } from "@/lib/kg/read";
+import { GraphCanvas, KIND_STYLE } from "@/components/GraphCanvas";
+import type { KgGraph, KgNode } from "@/lib/kg/read";
 
 interface SourceOption {
   graphSourceId: string;
@@ -27,15 +27,6 @@ interface DeriveSummary {
   blocked: number;
 }
 
-const KIND_STYLE: Record<KgNode["kind"], { fill: string; stroke: string; r: number }> = {
-  class: { fill: "#e1242a", stroke: "#9a171c", r: 16 },
-  property: { fill: "#94a3b8", stroke: "#64748b", r: 6 },
-  instance: { fill: "#0ea5e9", stroke: "#0369a1", r: 9 },
-};
-
-const WIDTH = 900;
-const HEIGHT = 620;
-
 export default function KnowledgeGraphPage() {
   const [meta, setMeta] = useState<KgMeta | null>(null);
   const [sourceId, setSourceId] = useState("");
@@ -50,6 +41,9 @@ export default function KnowledgeGraphPage() {
   const [selected, setSelected] = useState<KgNode | null>(null);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
+  const [depth, setDepth] = useState(1);
+  const [mode, setMode] = useState<"full" | "traversal">("full");
+  const [expanding, setExpanding] = useState<string | undefined>(undefined);
 
   useEffect(() => {
     getJSON<KgMeta>("/api/kg")
@@ -126,6 +120,7 @@ export default function KnowledgeGraphPage() {
       );
       setGraph(g);
       setSelected(null);
+      setMode("full");
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -133,16 +128,39 @@ export default function KnowledgeGraphPage() {
     }
   }
 
-  // Layout is deterministic, so the picture is stable across renders.
-  const positioned = useMemo(() => {
-    if (!graph || graph.nodes.length === 0) return null;
-    const pos = forceLayout(
-      graph.nodes.map((n) => ({ id: n.id, ring: ringFor(n.kind) })),
-      graph.edges,
-      { width: WIDTH, height: HEIGHT, seed: 7 }
+  /** TRAVERSAL: expand one node's neighbourhood to the chosen depth. */
+  async function expand(node: KgNode) {
+    setExpanding(node.id);
+    setError("");
+    try {
+      const g = await sendJSON<KgGraph>("/api/kg", "POST", {
+        op: "neighbors",
+        graphSourceId: sourceId,
+        nodeId: node.id,
+        depth,
+      });
+      setGraph(g);
+      setSelected(node);
+      setMode("traversal");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setExpanding(undefined);
+    }
+  }
+
+  const hiddenTotal = useMemo(() => {
+    if (!graph) return 0;
+    const shown = new Map<string, number>();
+    for (const e of graph.edges) {
+      shown.set(e.source, (shown.get(e.source) ?? 0) + 1);
+      shown.set(e.target, (shown.get(e.target) ?? 0) + 1);
+    }
+    return graph.nodes.reduce(
+      (acc, n) =>
+        acc + (typeof n.degree === "number" ? Math.max(0, n.degree - (shown.get(n.id) ?? 0)) : 0),
+      0
     );
-    const byId = new Map(pos.map((p) => [p.id, p]));
-    return { byId, nodes: graph.nodes, edges: graph.edges };
   }, [graph]);
 
   return (
@@ -215,6 +233,18 @@ export default function KnowledgeGraphPage() {
             <button className="btn-ghost" onClick={load} disabled={busy !== "" || !sourceId}>
               {busy === "load" ? "Loading…" : "3 · Load graph"}
             </button>
+            <label className="flex items-center gap-2 text-xs text-slate-600">
+              traversal depth
+              <select
+                className="input w-16 py-1"
+                value={depth}
+                onChange={(e) => setDepth(Number(e.target.value))}
+              >
+                <option value={1}>1</option>
+                <option value={2}>2</option>
+                <option value={3}>3</option>
+              </select>
+            </label>
           </div>
           {derived && (
             <div className="mt-3 rounded-lg bg-slate-50 px-4 py-3 text-xs text-slate-700">
@@ -254,6 +284,11 @@ export default function KnowledgeGraphPage() {
                   <span className="badge bg-slate-100 text-slate-600">
                     {graph.counts.edges} edges
                   </span>
+                  {mode === "traversal" && (
+                    <span className="badge bg-indigo-50 text-indigo-700">
+                      traversal depth {depth}
+                    </span>
+                  )}
                 </div>
                 <div className="flex items-center gap-3 text-xs text-slate-500">
                   <Legend kind="class" label="class" />
@@ -261,64 +296,43 @@ export default function KnowledgeGraphPage() {
                   <Legend kind="instance" label="instance" />
                 </div>
               </div>
-              <svg
-                viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
-                className="h-[620px] w-full bg-slate-50"
-                role="img"
-                aria-label="Knowledge graph"
+
+              {/* PRECISION: never present a partial view as complete. */}
+              <div
+                className={`border-b px-4 py-2 text-xs ${
+                  graph.truncation.complete
+                    ? "border-green-200 bg-green-50 text-green-800"
+                    : "border-amber-300 bg-amber-50 text-amber-900"
+                }`}
               >
-                {positioned &&
-                  positioned.edges.map((e: KgEdge, i) => {
-                    const a = positioned.byId.get(e.source);
-                    const b = positioned.byId.get(e.target);
-                    if (!a || !b) return null;
-                    const isSchema = e.type === "HAS_PROPERTY" || e.type === "INSTANCE_OF";
-                    return (
-                      <line
-                        key={i}
-                        x1={a.x}
-                        y1={a.y}
-                        x2={b.x}
-                        y2={b.y}
-                        stroke={isSchema ? "#cbd5e1" : "#fca5a5"}
-                        strokeWidth={isSchema ? 1 : 1.8}
-                        strokeDasharray={e.type === "INSTANCE_OF" ? "3 3" : undefined}
-                      />
-                    );
-                  })}
-                {positioned &&
-                  positioned.nodes.map((n) => {
-                    const p = positioned.byId.get(n.id);
-                    if (!p) return null;
-                    const style = KIND_STYLE[n.kind];
-                    const isSel = selected?.id === n.id;
-                    return (
-                      <g key={n.id} onClick={() => setSelected(n)} className="cursor-pointer">
-                        <circle
-                          cx={p.x}
-                          cy={p.y}
-                          r={isSel ? style.r + 4 : style.r}
-                          fill={style.fill}
-                          stroke={isSel ? "#0f172a" : style.stroke}
-                          strokeWidth={isSel ? 3 : 1.5}
-                          opacity={n.kind === "property" ? 0.85 : 1}
-                        />
-                        {(n.kind !== "property" || isSel) && (
-                          <text
-                            x={p.x}
-                            y={p.y - style.r - 5}
-                            textAnchor="middle"
-                            fontSize={n.kind === "class" ? 12 : 10}
-                            fontWeight={n.kind === "class" ? 600 : 400}
-                            fill="#0f172a"
-                          >
-                            {n.label.length > 22 ? `${n.label.slice(0, 21)}…` : n.label}
-                          </text>
-                        )}
-                      </g>
-                    );
-                  })}
-              </svg>
+                {graph.truncation.complete ? (
+                  <>
+                    Complete view — all {graph.truncation.nodesTotal} node(s) and{" "}
+                    {graph.truncation.edgesTotal} relationship(s) in this build are shown.
+                  </>
+                ) : (
+                  <>
+                    <b>Partial view.</b> Showing {graph.truncation.nodesReturned} of{" "}
+                    {graph.truncation.nodesTotal} node(s) and {graph.truncation.edgesReturned} of{" "}
+                    {graph.truncation.edgesTotal} relationship(s)
+                    {graph.truncation.edgesOmitted > 0 && (
+                      <> · {graph.truncation.edgesOmitted} edge(s) omitted (endpoint outside this view)</>
+                    )}
+                    {hiddenTotal > 0 && <> · {hiddenTotal} hidden connection(s), ringed amber</>}
+                    . Double-click a node to traverse from it.
+                  </>
+                )}
+              </div>
+
+              <GraphCanvas
+                nodes={graph.nodes}
+                edges={graph.edges}
+                selectedId={selected?.id}
+                originId={graph.origin}
+                onSelect={setSelected}
+                onExpand={expand}
+                busyNodeId={expanding}
+              />
             </section>
 
             {/* ---- detail panel ---- */}
@@ -326,8 +340,10 @@ export default function KnowledgeGraphPage() {
               <h3 className="text-sm font-semibold">Selected node</h3>
               {!selected ? (
                 <p className="mt-2 text-xs text-slate-500">
-                  Click a node to inspect it. Red = ontology class, grey = property, blue = data
-                  instance. Dashed edges are <span className="mono">INSTANCE_OF</span>.
+                  Click a node to inspect it, drag to pin it, double-click to traverse from it.
+                  Red = ontology class, grey = property, blue = data instance. Dashed edges are{" "}
+                  <span className="mono">INSTANCE_OF</span>. An amber dashed ring means the node has
+                  connections not shown here.
                 </p>
               ) : (
                 <div className="mt-2 space-y-2 text-xs">
@@ -342,6 +358,22 @@ export default function KnowledgeGraphPage() {
                     Object.entries(selected.properties).map(([k, v]) => (
                       <D key={k} k={k} v={v === null ? "—" : String(v)} mono />
                     ))}
+                  <div className="pt-1">
+                    <button
+                      type="button"
+                      className="btn-primary w-full"
+                      disabled={expanding !== undefined}
+                      onClick={() => selected && expand(selected)}
+                    >
+                      {expanding === selected.id ? "Traversing…" : `Traverse ${depth} hop(s) from here`}
+                    </button>
+                  </div>
+                  {typeof selected.degree === "number" && (
+                    <D
+                      k="edges"
+                      v={`${graph.edges.filter((e) => e.source === selected.id || e.target === selected.id).length} shown / ${selected.degree} total`}
+                    />
+                  )}
                   <div className="pt-2">
                     <div className="font-medium text-slate-700">Connections</div>
                     <ul className="mt-1 space-y-0.5">

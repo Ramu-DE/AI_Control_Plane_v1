@@ -303,3 +303,37 @@ test("an unknown persona can never build", () => {
   assert.equal(a.allowed, false);
   assert.equal(a.scoped.evaluated, false);
 });
+
+// --------------------------------------------------------------------------- //
+// Traversal + truncation precision
+// --------------------------------------------------------------------------- //
+
+test("traversal depth is validated, not interpolated from caller input", async () => {
+  // Cypher cannot parameterise a path bound, so depth is interpolated. It must
+  // therefore be proven to be a bounded integer — anything else is refused
+  // BEFORE a query is built (so these never touch the network).
+  const { readNeighborhood, MAX_DEPTH } = await import("../src/lib/kg/read.ts");
+  assert.equal(MAX_DEPTH, 3);
+  const backend = { type: "neo4j", uri: "neo4j+s://x.databases.neo4j.io", database: "d", username: "u" } as const;
+  for (const bad of [0, -1, 4, 99, 1.5, Number.NaN]) {
+    await assert.rejects(
+      () => readNeighborhood(backend as never, { nodeId: "n", depth: bad }),
+      (e: Error) => /depth must be an integer between 1 and 3/.test(e.message),
+      `depth ${bad} must be refused`
+    );
+  }
+  // An injection attempt arrives as a non-integer and is refused the same way.
+  await assert.rejects(
+    () => readNeighborhood(backend as never, { nodeId: "n", depth: "1] RETURN 1 //" as never }),
+    (e: Error) => /depth must be an integer/.test(e.message)
+  );
+});
+
+test("traversal requires a node id", async () => {
+  const { readNeighborhood } = await import("../src/lib/kg/read.ts");
+  const backend = { type: "neo4j", uri: "neo4j+s://x.databases.neo4j.io", database: "d", username: "u" } as const;
+  await assert.rejects(
+    () => readNeighborhood(backend as never, { nodeId: "   " }),
+    (e: Error) => /nodeId is required/.test(e.message)
+  );
+});

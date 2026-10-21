@@ -24,7 +24,7 @@ import {
   kgScopedTool,
   materializeKnowledgeGraph,
 } from "@/lib/kg/materialize";
-import { readKnowledgeGraph } from "@/lib/kg/read";
+import { MAX_DEPTH, readKnowledgeGraph, readNeighborhood } from "@/lib/kg/read";
 import type { Neo4jBackend } from "@/lib/graph/entities";
 
 export const runtime = "nodejs";
@@ -118,7 +118,15 @@ type BuildBody = {
   includeInstances?: boolean;
 };
 type DropBody = { op: "drop"; graphSourceId: string; buildId: string };
-type Body = DeriveBody | BuildBody | DropBody;
+type NeighborsBody = {
+  op: "neighbors";
+  graphSourceId: string;
+  nodeId: string;
+  depth?: number;
+  limit?: number;
+  buildId?: string;
+};
+type Body = DeriveBody | BuildBody | DropBody | NeighborsBody;
 
 export async function POST(req: NextRequest) {
   let body: Body;
@@ -211,6 +219,31 @@ export async function POST(req: NextRequest) {
         buildId,
       });
       return NextResponse.json({ graphSourceId: body.graphSourceId, ontology, ...result });
+    }
+
+    if (body.op === "neighbors") {
+      if (!body.graphSourceId || !body.nodeId) {
+        return NextResponse.json(
+          { error: "graphSourceId and nodeId are required" },
+          { status: 400 }
+        );
+      }
+      const { backend } = await resolveNeo4jSource(body.graphSourceId);
+      try {
+        const graph = await readNeighborhood(backend, {
+          nodeId: body.nodeId,
+          depth: body.depth,
+          limit: body.limit,
+          buildId: body.buildId,
+        });
+        return NextResponse.json({ graphSourceId: body.graphSourceId, ...graph });
+      } catch (e) {
+        // Bad depth / unknown node are caller errors, not server faults.
+        return NextResponse.json(
+          { error: (e as Error).message, code: "KG_TRAVERSAL", maxDepth: MAX_DEPTH },
+          { status: 400 }
+        );
+      }
     }
 
     if (body.op === "drop") {
