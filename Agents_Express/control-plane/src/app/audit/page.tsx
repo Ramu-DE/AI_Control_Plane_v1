@@ -13,6 +13,7 @@ const CATEGORIES: (AuditCategory | "all")[] = [
   "playground",
   "model",
   "graph",
+  "a2a",
 ];
 
 export default function AuditPage() {

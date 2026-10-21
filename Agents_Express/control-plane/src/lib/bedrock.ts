@@ -8,7 +8,9 @@ import {
   ConverseCommand,
 } from "@aws-sdk/client-bedrock-runtime";
 import { store } from "./store";
-import { StepRun, TokenUsage, WorkflowStep } from "./types";
+// Type-only import — see the note in store.ts (keeps the module loadable by
+// Node's strip-only TypeScript loader used by `npm test`).
+import type { StepRun, TokenUsage, WorkflowStep } from "./types";
 
 const REGION = process.env.AWS_REGION || "us-east-1";
 
@@ -27,14 +29,42 @@ const PROFILES: { match: RegExp; id: string }[] = [
   { match: /haiku/, id: "us.anthropic.claude-haiku-4-5-20251001-v1:0" },
 ];
 
-// Map a catalog model's upstream id to a Bedrock inference-profile id that is
-// known to be invokable in this account. Falls back to the cheap haiku profile.
-function toInferenceProfileId(upstream: string): string {
-  if (!upstream) return KNOWN_GOOD;
-  if (upstream.startsWith("us.")) return upstream;
+/**
+ * Map a catalog model's upstream id to a Bedrock inference-profile id that is
+ * known to be invokable in this account.
+ *
+ * FAILS LOUDLY on an unroutable id. It previously fell back to the cheap haiku
+ * profile for anything unrecognized, which silently executed a DIFFERENT model
+ * from the one selected and attributed the tokens and cost to it — e.g. a
+ * catalog model for `bedrock-mantle/openai.gpt-oss-120b` ran on
+ * claude-haiku-4-5 and still reported success. Substituting a model without
+ * telling the operator is worse than refusing the step.
+ */
+export function toInferenceProfileId(upstream: string): string {
+  if (!upstream) {
+    throw new UnroutableModelError(
+      "catalog model has no modelId, so no Bedrock inference profile can be resolved"
+    );
+  }
+  // Already an inference-profile id (us. / eu. / apac. / global.).
+  if (/^(us|eu|apac|global)\./.test(upstream)) return upstream;
   const lower = upstream.toLowerCase();
   for (const p of PROFILES) if (p.match.test(lower)) return p.id;
-  return KNOWN_GOOD;
+  throw new UnroutableModelError(
+    `no Bedrock inference profile matches model '${upstream}'. Either use an ` +
+      `inference-profile id, name an Anthropic family (opus/sonnet/haiku), or set the ` +
+      `catalog model's inferenceProvider to the plane that actually serves it ` +
+      `(e.g. "Databricks Model Serving").`
+  );
+}
+
+/** Raised when a catalog model cannot be routed to a real Bedrock profile. */
+export class UnroutableModelError extends Error {
+  readonly code = "MODEL_UNROUTABLE";
+  constructor(message: string) {
+    super(message);
+    this.name = "UnroutableModelError";
+  }
 }
 
 // Rough per-1K-token cost estimate (USD). Demo-grade; refine per real pricing.

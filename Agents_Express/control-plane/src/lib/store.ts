@@ -6,7 +6,10 @@
 // AgentCore control APIs (list-gateways, list-agent-runtimes, Verified
 // Permissions, etc.) behind the same function signatures.
 
-import {
+// Type-only import: these are all interfaces/aliases, so importing them as
+// types keeps the module loadable by Node's strip-only TypeScript loader (used
+// by `npm test`) as well as by the Next.js build.
+import type {
   AgentConfig,
   AuditEvent,
   CatalogModel,
@@ -388,6 +391,90 @@ function seed(): Store {
   action == Action::"queryGraphSource",
   resource == Tool::"omda"
 );`,
+      },
+      {
+        id: "pol-gw-kg-build-perimeter",
+        name: "Gateway: authenticated personas may build knowledge graphs",
+        layer: "gateway",
+        description:
+          "Knowledge-graph WRITE perimeter. The only write path in the platform (lib/kg/materialize.ts) \u2014 the query path stays read-only. Scope one source by adding a policy naming Tool::\"kg:<graphSourceId>\".",
+        enabled: true,
+        createdAt: iso(0),
+        cedar: `permit(
+  principal,
+  action == Action::"buildKnowledgeGraph",
+  resource == Tool::"kg"
+);`,
+      },
+      {
+        id: "pol-gw-run-agent-perimeter",
+        name: "Gateway: authenticated personas may run agents in workflows",
+        layer: "gateway",
+        description:
+          "Workflow perimeter. Stage 1 of the two-stage check in lib/workflow/govern.ts — grants the right to execute a workflow step AS a registered agent. Scope a single agent by adding a policy naming Tool::\"workflow:<agentId>\".",
+        enabled: true,
+        createdAt: iso(0),
+        cedar: `permit(
+  principal,
+  action == Action::"runAgent",
+  resource == Tool::"workflow"
+);`,
+      },
+      {
+        id: "pol-gw-kb-perimeter",
+        name: "Gateway: authenticated personas may query knowledge bases",
+        layer: "gateway",
+        description:
+          "RAG perimeter. Stage 1 of the two-stage check in lib/kb/service.ts — grants use of the retrieval path, not access to any particular KB. Scope a single KB by adding a policy naming Tool::\"kb:<recordId>\".",
+        enabled: true,
+        createdAt: iso(0),
+        cedar: `permit(
+  principal,
+  action == Action::"queryKnowledgeBase",
+  resource == Tool::"kb"
+);`,
+      },
+      {
+        id: "pol-gw-a2a-perimeter",
+        name: "Gateway: authenticated personas may use A2A",
+        layer: "gateway",
+        description:
+          "A2A perimeter. Stage 1 of the two-stage check in lib/a2a/logic.ts — grants access to the A2A client itself, not to any particular peer.",
+        enabled: true,
+        createdAt: iso(0),
+        cedar: `permit(
+  principal,
+  action == Action::"callAgent",
+  resource == Tool::"a2a"
+);`,
+      },
+      {
+        id: "pol-gw-a2a-sales-mgr",
+        name: "Gateway: Managers may call the Sales peer agent",
+        layer: "gateway",
+        description:
+          "Peer-scoped 'who may call whom'. Naming Tool::\"a2a:sales-agent\" makes this peer's rules authoritative, so a persona without a matching permit is denied even though the perimeter allowed it.",
+        enabled: true,
+        createdAt: iso(0),
+        cedar: `permit(
+  principal,
+  action == Action::"callAgent",
+  resource == Tool::"a2a:sales-agent"
+) when { principal.role == "manager" };`,
+      },
+      {
+        id: "pol-gw-a2a-sales-dir",
+        name: "Gateway: Directors may call the Sales peer agent",
+        layer: "gateway",
+        description:
+          "Companion to the Manager rule — the evaluator ANDs conditions within one policy, so each role is granted by its own policy.",
+        enabled: true,
+        createdAt: iso(0),
+        cedar: `permit(
+  principal,
+  action == Action::"callAgent",
+  resource == Tool::"a2a:sales-agent"
+) when { principal.role == "director" };`,
       },
       {
         id: "pol-gw-allow-ic-list",

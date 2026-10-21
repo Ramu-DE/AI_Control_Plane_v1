@@ -71,6 +71,8 @@ const GROUPS: NavGroup[] = [
     items: [
       { href: "/registry", label: "Registry", icon: "registry" },
       { href: "/graph", label: "Graph Sources", icon: "gateway" },
+      { href: "/a2a", label: "A2A Peers", icon: "agents" },
+      { href: "/kg", label: "Knowledge Graph", icon: "gateway" },
     ],
   },
   {

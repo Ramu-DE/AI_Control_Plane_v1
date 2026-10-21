@@ -1,0 +1,179 @@
+// In-memory A2A peer store.
+//
+// Follows the same conventions as lib/store.ts: a module-level singleton kept on
+// globalThis so it survives `next dev` hot-reloads, mutated through small
+// functions so the persistence layer can later be swapped (DynamoDB, the
+// GraphControlStore pattern) without touching the API routes.
+//
+// Writes are guarded by an optimistic-concurrency `rev` token, matching the
+// graph control plane, so two concurrent approvals cannot silently clobber.
+
+import { newId } from "../store";
+import { canTransition } from "./logic";
+import type { RecordStatus } from "../types";
+import type { A2AAgentCard, A2APeer } from "./types";
+import { A2ANotFoundError } from "./types";
+
+export class A2AVersionConflictError extends Error {
+  readonly code = "A2A_VERSION_CONFLICT";
+  constructor(message = "peer was modified by another request; retry") {
+    super(message);
+    this.name = "A2AVersionConflictError";
+  }
+}
+
+export class A2ATransitionError extends Error {
+  readonly code = "A2A_INVALID_TRANSITION";
+  constructor(message: string) {
+    super(message);
+    this.name = "A2ATransitionError";
+  }
+}
+
+function iso(daysAgo = 0): string {
+  const d = new Date();
+  d.setDate(d.getDate() - daysAgo);
+  return d.toISOString();
+}
+
+/**
+ * Seed peers. Both endpoints are deliberately placeholders, so the platform
+ * ships in routing-preview mode: discovery and live sends are refused until a
+ * real endpoint and a matching allowlist are configured. Nothing here asserts a
+ * capability the deployment does not have.
+ */
+function seedPeers(): A2APeer[] {
+  const base = {
+    card: null,
+    owner: "platform-team",
+    allowedHosts: [] as string[],
+    auth: { kind: "none" as const },
+  };
+  return [
+    {
+      ...base,
+      peerId: "sales-agent",
+      displayName: "Sales Agent",
+      description:
+        "Peer agent owned by Commercial: demand signals and fulfilment planning.",
+      tenantId: "bu-us",
+      endpoint: "https://REPLACE-ME-sales-agent.example.com",
+      status: "Approved",
+      createdAt: iso(2),
+      updatedAt: iso(2),
+      rev: 1,
+    },
+    {
+      ...base,
+      peerId: "supply-chain-agent",
+      displayName: "Supply Chain Agent",
+      description:
+        "Peer agent owned by Global Supply & Quality: route optimization and ETA.",
+      tenantId: "fn-supply",
+      endpoint: "https://REPLACE-ME-supply-chain-agent.example.com",
+      // Draft on purpose — demonstrates that an unapproved peer cannot be called.
+      status: "Draft",
+      createdAt: iso(1),
+      updatedAt: iso(1),
+      rev: 1,
+    },
+  ];
+}
+
+const globalForA2A = globalThis as unknown as { __a2aPeers?: A2APeer[] };
+
+export const a2aPeers: A2APeer[] = globalForA2A.__a2aPeers ?? seedPeers();
+if (!globalForA2A.__a2aPeers) globalForA2A.__a2aPeers = a2aPeers;
+
+// --------------------------------------------------------------------------- //
+// Accessors
+// --------------------------------------------------------------------------- //
+
+export function listPeers(filter: { tenantId?: string; status?: RecordStatus } = {}): A2APeer[] {
+  let items = [...a2aPeers];
+  if (filter.tenantId) items = items.filter((p) => p.tenantId === filter.tenantId);
+  if (filter.status) items = items.filter((p) => p.status === filter.status);
+  return items.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+export function getPeer(peerId: string): A2APeer | undefined {
+  return a2aPeers.find((p) => p.peerId === peerId);
+}
+
+export function requirePeer(peerId: string): A2APeer {
+  const peer = getPeer(peerId);
+  if (!peer) throw new A2ANotFoundError(`A2A peer '${peerId}' not found`);
+  return peer;
+}
+
+export interface CreatePeerInput {
+  peerId: string;
+  displayName: string;
+  description?: string;
+  tenantId: string;
+  endpoint: string;
+  allowedHosts?: string[];
+  auth?: A2APeer["auth"];
+  owner?: string;
+}
+
+/** Create a peer in Draft. Throws if the id is taken. */
+export function createPeer(input: CreatePeerInput): A2APeer {
+  if (getPeer(input.peerId)) {
+    throw new A2AVersionConflictError(`peer '${input.peerId}' already exists`);
+  }
+  const now = new Date().toISOString();
+  const peer: A2APeer = {
+    peerId: input.peerId,
+    displayName: input.displayName,
+    description: input.description ?? "",
+    tenantId: input.tenantId,
+    endpoint: input.endpoint,
+    allowedHosts: input.allowedHosts ?? [],
+    auth: input.auth ?? { kind: "none" },
+    card: null,
+    status: "Draft",
+    owner: input.owner ?? "console-user",
+    createdAt: now,
+    updatedAt: now,
+    rev: 1,
+  };
+  a2aPeers.unshift(peer);
+  return peer;
+}
+
+/** Attach a freshly discovered Agent Card. */
+export function setPeerCard(
+  peerId: string,
+  card: A2AAgentCard,
+  expectedRev: number
+): A2APeer {
+  const peer = requirePeer(peerId);
+  if (peer.rev !== expectedRev) throw new A2AVersionConflictError();
+  peer.card = card;
+  peer.rev += 1;
+  peer.updatedAt = new Date().toISOString();
+  return peer;
+}
+
+/** Advance a peer through its lifecycle. */
+export function transitionPeer(
+  peerId: string,
+  next: RecordStatus,
+  expectedRev: number
+): A2APeer {
+  const peer = requirePeer(peerId);
+  if (peer.rev !== expectedRev) throw new A2AVersionConflictError();
+  if (!canTransition(peer.status, next)) {
+    throw new A2ATransitionError(`invalid transition ${peer.status} → ${next}`);
+  }
+  peer.status = next;
+  peer.rev += 1;
+  peer.updatedAt = new Date().toISOString();
+  return peer;
+}
+
+/** A stable message id for one A2A exchange. */
+export function newMessageId(): string {
+  return newId("a2a-msg");
+}

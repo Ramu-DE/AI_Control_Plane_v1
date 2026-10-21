@@ -124,6 +124,44 @@ export interface KnowledgeConfig {
   };
   // Residency hint for regulated data (EU/JP/US).
   residencyRegion?: string;
+
+  // --- additive, optional: everything below is needed to actually RETRIEVE ---
+
+  /**
+   * Credential REFERENCE for the provider. Never a secret value — the server
+   * resolves it at retrieval time (see lib/kb/secrets.ts). Exactly one locator
+   * is normally set.
+   */
+  auth?: {
+    /** Name of a server-side env var holding the key. */
+    apiKeyEnvVar?: string;
+    /** AWS Secrets Manager ARN or name. */
+    apiKeySecretRef?: string;
+    /** Key within a JSON secret payload (default "apiKey"). */
+    secretJsonKey?: string;
+  };
+
+  /** Hostnames permitted for outbound retrieval calls (SSRF allowlist). */
+  allowedHosts?: string[];
+
+  /**
+   * How to read a provider record: which payload field carries the chunk text,
+   * which carries the id, and which fields to pass through as metadata. Keeps
+   * the retriever descriptor-driven instead of assuming a schema.
+   */
+  fieldMapping?: {
+    textField?: string;
+    idField?: string;
+    metadataFields?: string[];
+  };
+
+  /** Embedding model used to build the collection — must match, or recall breaks. */
+  embedding?: {
+    /** Bedrock model id, e.g. "amazon.titan-embed-text-v2:0". */
+    modelId: string;
+    /** Vector size of the collection, e.g. 1024. */
+    dimension: number;
+  };
 }
 
 // Governance lifecycle: Draft -> Pending approval -> Approved/Rejected -> Deprecated.
@@ -199,7 +237,13 @@ export interface AgentConfig {
 
 // The platform model catalog (Settings → Models). Admins curate; agent
 // developers consume. Distinct from the Part 5 LLM-gateway routes/providers.
-export type InferenceProvider = "Amazon Bedrock" | "Anthropic" | "OpenAI" | "AgentCore Gateway";
+export type InferenceProvider =
+  | "Amazon Bedrock"
+  | "Anthropic"
+  | "OpenAI"
+  | "AgentCore Gateway"
+  // Executed for real by lib/databricks.ts against a Model Serving endpoint.
+  | "Databricks Model Serving";
 
 export type InferenceApi = "Responses API (/v1/responses)" | "Chat Completions (/v1/chat/completions)";
 
@@ -217,10 +261,16 @@ export interface CatalogModel {
   // --- Part 5: gateway-routed model fields (only when inferenceProvider === "AgentCore Gateway") ---
   // The inference target this model routes to (derived from the modelId prefix).
   targetName?: string;
-  // The LLM gateway's /inference/v1 base URL.
+  // The LLM gateway's /inference/v1 base URL. For Databricks Model Serving this
+  // is the workspace host; when unset, DATABRICKS_HOST is used.
   gatewayBaseUrl?: string;
   // Which inference API the target accepts.
   inferenceApi?: InferenceApi;
+  /**
+   * Name of the env var holding this model's bearer token. A REFERENCE only —
+   * never a token. Defaults to DATABRICKS_TOKEN for Databricks Model Serving.
+   */
+  tokenEnvVar?: string;
   createdAt: string;
 }
 
@@ -439,7 +489,9 @@ export type AuditCategory =
   | "policy"
   | "playground"
   | "model"
-  | "graph";
+  | "graph"
+  | "a2a"
+  | "kb";
 
 export interface AuditEvent {
   id: ID;
@@ -561,11 +613,23 @@ export interface PolicyStore {
 export interface WorkflowStep {
   id: ID;
   name: string; // e.g. "Researcher"
-  modelId: ID; // catalog model id to run this step with
+  /**
+   * Catalog model to run this step with. OPTIONAL when `agentId` is set — the
+   * agent's model is inherited instead (and wins if both are given).
+   */
+  modelId?: ID;
   prompt: string; // the step's instruction/system prompt
   toolRefs: ID[];
   knowledgeRefs: ID[];
   reviewGate: boolean; // pause after this step for human approve/revise/deny
+  /**
+   * Bind this step to a REGISTERED agent (/agents). When set, the step inherits
+   * the agent's model, system prompt, toolRefs and knowledgeRefs, and the
+   * agent's `compute.modelRuntimeId` selects the executor. This is what joins
+   * the governance half of the platform to the execution half — without it a
+   * step is an anonymous (name + prompt + model) unit.
+   */
+  agentId?: ID;
 }
 
 export interface Workflow {
@@ -594,11 +658,38 @@ export interface TokenUsage {
   totalTokens: number;
 }
 
+/** Where a step's configuration came from, for an auditable run record. */
+export interface StepProvenance {
+  /** The registered agent this step ran as, when agent-bound. */
+  agentId?: ID;
+  agentName?: string;
+  /** The agent runtime declared by that agent (declarative — not a deployer). */
+  agentRuntimeId?: string;
+  /** The model runtime that selected the executor. */
+  modelRuntimeId?: string;
+  /** Catalog model resolved for the call. */
+  catalogModelId?: ID;
+  /** Which execution plane actually ran it. */
+  executor: "bedrock" | "databricks";
+  /** Tool names the agent is permitted to use (NOT invoked — see notes). */
+  resolvedTools?: string[];
+}
+
+/** RAG grounding attached to a step, when the agent references a Knowledge Base. */
+export interface StepGrounding {
+  recordId: ID;
+  recordName: string;
+  provider: string;
+  passageCount: number;
+  /** Citations: one per injected passage, in prompt order. */
+  citations: { id: string; score: number; source: string }[];
+}
+
 export interface StepRun {
   stepId: ID;
   name: string;
   status: StepRunStatus;
-  output: string; // actual Bedrock text, possibly human-revised
+  output: string; // actual model text, possibly human-revised
   modelId: string; // resolved upstream model id actually invoked
   usage: TokenUsage | null;
   latencyMs: number | null;
@@ -609,6 +700,20 @@ export interface StepRun {
   startedAt?: string;
   finishedAt?: string;
   error?: string;
+  /** Provenance of the resolved configuration (agent-bound steps especially). */
+  provenance?: StepProvenance;
+  /** Retrieval grounding used for this step, if any. */
+  grounding?: StepGrounding;
+  /** Non-fatal observations (degraded grounding, unexecuted tools, …). */
+  notes?: string[];
+  /** Tools the model actually invoked during this step, in order. */
+  toolCalls?: {
+    name: string;
+    arguments: Record<string, unknown>;
+    ok: boolean;
+    resultPreview: string;
+    latencyMs: number;
+  }[];
 }
 
 export type WorkflowRunStatus =
@@ -625,6 +730,12 @@ export interface WorkflowRun {
   tenantId: ID;
   status: WorkflowRunStatus;
   input: string;
+  /**
+   * The caller the run executes as. REQUIRED when any step is agent-bound, so
+   * the Cedar `runAgent` check has a principal — a governed agent must never
+   * execute without an attributable caller.
+   */
+  personaId?: ID;
   steps: StepRun[];
   currentStep: number;
   totalCostUsd: number;

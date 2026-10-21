@@ -3,6 +3,34 @@ import { store, newId, logAudit } from "@/lib/store";
 import { getTierConfig } from "@/lib/tiers";
 import { AgentConfig } from "@/lib/types";
 import { defaultAgentCompute, isAgentCompute } from "@/lib/runtimes";
+import type { InferenceProvider } from "@/lib/types";
+
+/**
+ * Which model runtimes can serve a given inference provider.
+ *
+ * Only providers with a REAL executor are constrained; the rest stay
+ * declarative so existing agents and the AWS families keep working.
+ */
+function modelRuntimeMismatch(
+  modelRuntimeId: string,
+  provider: InferenceProvider
+): string | null {
+  const isDatabricksRuntime = modelRuntimeId.startsWith("databricks-");
+
+  if (provider === "Databricks Model Serving" && !isDatabricksRuntime) {
+    return (
+      `model is served by Databricks Model Serving, so compute.modelRuntimeId must be a ` +
+      `databricks-* runtime (got '${modelRuntimeId}')`
+    );
+  }
+  if (provider === "Amazon Bedrock" && isDatabricksRuntime) {
+    return (
+      `model is served by Amazon Bedrock, so compute.modelRuntimeId must be an aws-* runtime ` +
+      `(got '${modelRuntimeId}')`
+    );
+  }
+  return null;
+}
 
 export async function GET() {
   return NextResponse.json(store.agents);
@@ -39,7 +67,8 @@ export async function POST(req: NextRequest) {
   }
 
   // The model must exist in the platform catalog (Settings → Models).
-  if (!store.models.some((m) => m.id === body.modelId)) {
+  const catalogModel = store.models.find((m) => m.id === body.modelId);
+  if (!catalogModel) {
     return NextResponse.json(
       { error: "modelId must reference a model in the catalog" },
       { status: 400 }
@@ -107,6 +136,17 @@ export async function POST(req: NextRequest) {
       },
       { status: 400 }
     );
+  }
+
+  // The selected model runtime must agree with where the model is actually
+  // served, otherwise the field is decorative: picking a Databricks runtime for
+  // a Bedrock model (or vice versa) would silently execute somewhere else.
+  const planeMismatch = modelRuntimeMismatch(
+    compute.modelRuntimeId,
+    catalogModel.inferenceProvider
+  );
+  if (planeMismatch) {
+    return NextResponse.json({ error: planeMismatch }, { status: 400 });
   }
 
   const agent: AgentConfig = {

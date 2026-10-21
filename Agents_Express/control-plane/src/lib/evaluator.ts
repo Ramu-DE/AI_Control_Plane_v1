@@ -9,7 +9,8 @@
 // results. Replace with the real Cedar engine / AVP when wiring to AWS.
 
 import { store } from "./store";
-import {
+// Type-only import — see the note in store.ts.
+import type {
   EvaluationRequest,
   EvaluationResult,
   LayerDecision,

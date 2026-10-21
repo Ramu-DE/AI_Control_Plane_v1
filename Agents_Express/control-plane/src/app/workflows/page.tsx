@@ -1,9 +1,32 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { PageHeader, Pill, EmptyState } from "@/components/ui";
+import { PageHeader, Pill, EmptyState, Field, Modal } from "@/components/ui";
 import { getJSON, sendJSON } from "@/lib/api";
-import { Workflow, WorkflowRun, StepRun } from "@/lib/types";
+import type { Workflow, WorkflowRun, StepRun, WorkflowStep } from "@/lib/types";
+
+// Shapes the API now returns alongside workflows/runs so this page can BUILD one.
+interface AgentOption {
+  id: string;
+  name: string;
+  tenantId: string;
+  modelId: string;
+  agentRuntimeId: string;
+  modelRuntimeId: string;
+  toolCount: number;
+  knowledgeCount: number;
+}
+interface ModelOption { id: string; name: string; inferenceProvider: string }
+interface TenantOption { id: string; tenantName: string }
+interface PersonaOption { id: string; name: string; groups: string[] }
+interface WorkflowsData {
+  workflows: Workflow[];
+  runs: WorkflowRun[];
+  agents: AgentOption[];
+  models: ModelOption[];
+  tenants: TenantOption[];
+  personas: PersonaOption[];
+}
 
 const STEP_STATUS_COLOR: Record<string, string> = {
   pending: "bg-slate-100 text-slate-500",
@@ -26,13 +49,23 @@ export default function WorkflowsPage() {
   );
   const [busy, setBusy] = useState(false);
   const [reviseText, setReviseText] = useState("");
+  const [agents, setAgents] = useState<AgentOption[]>([]);
+  const [models, setModels] = useState<ModelOption[]>([]);
+  const [tenants, setTenants] = useState<TenantOption[]>([]);
+  const [personas, setPersonas] = useState<PersonaOption[]>([]);
+  const [personaId, setPersonaId] = useState("");
+  const [showCreate, setShowCreate] = useState(false);
+  const [error, setError] = useState("");
 
   async function load() {
-    const d = await getJSON<{ workflows: Workflow[]; runs: WorkflowRun[] }>(
-      "/api/workflows"
-    );
+    const d = await getJSON<WorkflowsData>("/api/workflows");
     setWorkflows(d.workflows);
     setRuns(d.runs);
+    setAgents(d.agents ?? []);
+    setModels(d.models ?? []);
+    setTenants(d.tenants ?? []);
+    setPersonas(d.personas ?? []);
+    setPersonaId((cur) => cur || d.personas?.[0]?.id || "");
     if (!selectedWf && d.workflows[0]) setSelectedWf(d.workflows[0].id);
     if (activeRun) {
       const fresh = d.runs.find((r) => r.id === activeRun.id);
@@ -49,14 +82,18 @@ export default function WorkflowsPage() {
   async function startRun() {
     if (!wf) return;
     setBusy(true);
+    setError("");
     try {
       const run = await sendJSON<WorkflowRun>("/api/workflows", "POST", {
         op: "start",
         workflowId: wf.id,
         input,
+        personaId: personaId || undefined,
       });
       setActiveRun(run);
       await load();
+    } catch (e) {
+      setError((e as Error).message);
     } finally {
       setBusy(false);
     }
@@ -105,8 +142,18 @@ export default function WorkflowsPage() {
     <>
       <PageHeader
         title="Workflows"
-        subtitle="Multi-agent workflows executed for real on Amazon Bedrock, with human-in-the-loop review gates."
+        subtitle="Multi-agent workflows executed for real on Bedrock or Databricks. A step can run AS a registered agent — inheriting its model, system prompt and knowledge bases, and governed by Cedar as that agent. Approved tools the platform implements are really invoked (Databricks plane)."
+        action={
+          <button type="button" className="btn-primary" onClick={() => setShowCreate(true)}>
+            New workflow
+          </button>
+        }
       />
+      {error && (
+        <div className="mx-4 mb-2 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700 sm:mx-6 lg:mx-8">
+          {error}
+        </div>
+      )}
       <div className="grid gap-6 px-8 pb-10 lg:grid-cols-[320px_1fr]">
         {/* LEFT: workflow list + designer */}
         <div className="space-y-4">
@@ -155,6 +202,16 @@ export default function WorkflowsPage() {
                         </span>
                       )}
                     </div>
+                    {s.agentId && (
+                      <div className="mt-1 flex flex-wrap items-center gap-1">
+                        <span className="badge bg-brand-50 text-brand-700">
+                          agent: {agents.find((a) => a.id === s.agentId)?.name ?? s.agentId}
+                        </span>
+                        <span className="badge bg-slate-100 text-slate-600">
+                          {agents.find((a) => a.id === s.agentId)?.modelRuntimeId ?? "?"}
+                        </span>
+                      </div>
+                    )}
                     <p className="mt-1 text-xs text-slate-500">{s.prompt}</p>
                   </div>
                 ))}
@@ -171,6 +228,25 @@ export default function WorkflowsPage() {
               Each step is a real Bedrock Converse call. Gated steps pause for
               your approval.
             </p>
+            <div className="mt-3">
+              <Field
+                label="Run as persona"
+                hint="Required when any step is bound to an agent — the Cedar runAgent check needs a principal."
+              >
+                <select
+                  className="input"
+                  value={personaId}
+                  onChange={(e) => setPersonaId(e.target.value)}
+                >
+                  <option value="">(none — model-only steps)</option>
+                  {personas.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name} ({p.groups.join(", ")})
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            </div>
             <textarea
               className="input mt-3 h-20"
               value={input}
@@ -283,6 +359,20 @@ export default function WorkflowsPage() {
           )}
         </div>
       </div>
+
+      {showCreate && (
+        <CreateWorkflowModal
+          agents={agents}
+          models={models}
+          tenants={tenants}
+          onClose={() => setShowCreate(false)}
+          onCreated={async (id) => {
+            setShowCreate(false);
+            await load();
+            setSelectedWf(id);
+          }}
+        />
+      )}
     </>
   );
 }
@@ -343,6 +433,75 @@ function StepCard({
       {sr.modelId && (
         <div className="mono mt-1 text-[11px] text-slate-400">{sr.modelId}</div>
       )}
+      {sr.provenance && (
+        <div className="mt-1 flex flex-wrap gap-1">
+          <span
+            className={`badge ${
+              sr.provenance.executor === "databricks"
+                ? "bg-orange-50 text-orange-700"
+                : "bg-sky-50 text-sky-700"
+            }`}
+          >
+            ran on: {sr.provenance.executor}
+          </span>
+          {sr.provenance.agentName && (
+            <span className="badge bg-brand-50 text-brand-700">
+              as agent: {sr.provenance.agentName}
+            </span>
+          )}
+          {sr.provenance.modelRuntimeId && (
+            <span className="badge bg-slate-100 text-slate-600">
+              {sr.provenance.modelRuntimeId}
+            </span>
+          )}
+        </div>
+      )}
+      {sr.grounding && (
+        <div className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50 p-2 text-xs text-emerald-900">
+          <div className="font-medium">
+            Grounded on {sr.grounding.recordName} ({sr.grounding.provider}) —{" "}
+            {sr.grounding.passageCount} passage(s)
+          </div>
+          <ul className="mt-1 space-y-0.5">
+            {sr.grounding.citations.map((c, i) => (
+              <li key={c.id + i} className="mono">
+                [{i + 1}] {c.id} · score {c.score.toFixed(4)} · {c.source}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {sr.toolCalls && sr.toolCalls.length > 0 && (
+        <div className="mt-2 rounded-lg border border-indigo-200 bg-indigo-50 p-2 text-xs text-indigo-900">
+          <div className="font-medium">
+            {sr.toolCalls.length} tool call(s) executed by the model
+          </div>
+          <ul className="mt-1 space-y-1">
+            {sr.toolCalls.map((c, i) => (
+              <li key={i}>
+                <span className="mono font-medium">{c.name}</span>
+                <span className={c.ok ? "ml-1 text-green-700" : "ml-1 text-red-700"}>
+                  {c.ok ? "ok" : "failed"}
+                </span>
+                <span className="ml-1 text-indigo-700">· {c.latencyMs}ms</span>
+                <div className="mono mt-0.5 break-all text-[11px] text-indigo-800">
+                  args {JSON.stringify(c.arguments)}
+                </div>
+                <div className="mono break-all text-[11px] text-indigo-600">
+                  {c.resultPreview.slice(0, 180)}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {sr.notes && sr.notes.length > 0 && (
+        <ul className="mt-2 space-y-0.5 text-xs text-amber-700">
+          {sr.notes.map((n, i) => (
+            <li key={i}>· {n}</li>
+          ))}
+        </ul>
+      )}
       {sr.output && (
         <pre className="mt-2 whitespace-pre-wrap rounded-lg bg-slate-50 p-3 text-xs text-slate-700">
           {sr.output}
@@ -358,5 +517,266 @@ function StepCard({
         </p>
       )}
     </div>
+  );
+}
+
+
+/* ---------- Create workflow (agent-bound or model-only steps) ---------- */
+
+interface DraftStep {
+  name: string;
+  mode: "agent" | "model";
+  agentId: string;
+  modelId: string;
+  prompt: string;
+  reviewGate: boolean;
+}
+
+function CreateWorkflowModal({
+  agents,
+  models,
+  tenants,
+  onClose,
+  onCreated,
+}: {
+  agents: AgentOption[];
+  models: ModelOption[];
+  tenants: TenantOption[];
+  onClose: () => void;
+  onCreated: (id: string) => Promise<void>;
+}) {
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [tenantId, setTenantId] = useState(tenants[0]?.id ?? "");
+  const [steps, setSteps] = useState<DraftStep[]>([
+    { name: "Step 1", mode: "agent", agentId: "", modelId: "", prompt: "", reviewGate: false },
+  ]);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  // Only agents owned by the selected tenant can be bound — the resolver
+  // rejects cross-tenant execution, so do not offer it here either.
+  const eligible = agents.filter((a) => a.tenantId === tenantId);
+
+  function patch(i: number, next: Partial<DraftStep>) {
+    setSteps((cur) => cur.map((s, idx) => (idx === i ? { ...s, ...next } : s)));
+  }
+
+  async function create() {
+    setError("");
+    if (!name.trim()) return setError("Give the workflow a name.");
+    if (!tenantId) return setError("Select an owning tenant.");
+    const payload: WorkflowStep[] = [];
+    for (let i = 0; i < steps.length; i++) {
+      const s = steps[i];
+      if (!s.prompt.trim()) return setError(`Step ${i + 1} needs a prompt.`);
+      if (s.mode === "agent" && !s.agentId) return setError(`Step ${i + 1}: pick an agent.`);
+      if (s.mode === "model" && !s.modelId) return setError(`Step ${i + 1}: pick a model.`);
+      payload.push({
+        id: `s${i + 1}`,
+        name: s.name.trim() || `Step ${i + 1}`,
+        prompt: s.prompt.trim(),
+        toolRefs: [],
+        knowledgeRefs: [],
+        reviewGate: s.reviewGate,
+        ...(s.mode === "agent" ? { agentId: s.agentId } : { modelId: s.modelId }),
+      });
+    }
+    setBusy(true);
+    try {
+      const wf = await sendJSON<Workflow>("/api/workflows", "POST", {
+        op: "create",
+        name: name.trim(),
+        description: description.trim(),
+        tenantId,
+        steps: payload,
+      });
+      await onCreated(wf.id);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal
+      title="New workflow"
+      subtitle="Bind each step to a registered agent (inherits its model, prompt, tools and knowledge bases) or to a catalog model directly."
+      onClose={onClose}
+      size="lg"
+      footer={
+        <>
+          <button type="button" className="btn-ghost" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="button" className="btn-primary" onClick={create} disabled={busy}>
+            {busy ? "Creating…" : "Create workflow"}
+          </button>
+        </>
+      }
+    >
+      <div className="space-y-4">
+        {error && (
+          <div className="rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>
+        )}
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="Name" required>
+            <input
+              className="input"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Supplier_Contract_Review"
+            />
+          </Field>
+          <Field label="Owning tenant" required>
+            <select
+              className="input"
+              value={tenantId}
+              onChange={(e) => setTenantId(e.target.value)}
+            >
+              {tenants.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.tenantName}
+                </option>
+              ))}
+            </select>
+          </Field>
+        </div>
+        <Field label="Description">
+          <input
+            className="input"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            placeholder="What this workflow produces"
+          />
+        </Field>
+
+        <div className="space-y-3">
+          {steps.map((s, i) => (
+            <div key={i} className="rounded-xl border border-slate-200 p-3">
+              <div className="flex items-center justify-between gap-2">
+                <input
+                  className="input w-48"
+                  value={s.name}
+                  onChange={(e) => patch(i, { name: e.target.value })}
+                  placeholder={`Step ${i + 1}`}
+                />
+                <div className="flex items-center gap-2">
+                  <label className="flex items-center gap-1 text-xs text-slate-600">
+                    <input
+                      type="checkbox"
+                      checked={s.reviewGate}
+                      onChange={(e) => patch(i, { reviewGate: e.target.checked })}
+                    />
+                    review gate
+                  </label>
+                  {steps.length > 1 && (
+                    <button
+                      type="button"
+                      className="text-xs text-slate-400 hover:text-red-600"
+                      onClick={() => setSteps((cur) => cur.filter((_, idx) => idx !== i))}
+                    >
+                      remove
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="mt-2 flex gap-2">
+                {(["agent", "model"] as const).map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => patch(i, { mode: m })}
+                    className={`badge border px-3 py-1 ${
+                      s.mode === m
+                        ? "border-brand-500 bg-brand-50 text-brand-700"
+                        : "border-slate-300 bg-white text-slate-600"
+                    }`}
+                  >
+                    {m === "agent" ? "run as agent" : "model only"}
+                  </button>
+                ))}
+              </div>
+
+              {s.mode === "agent" ? (
+                <div className="mt-2">
+                  <Field
+                    label="Agent"
+                    hint={
+                      eligible.length === 0
+                        ? "No ready agents in this tenant — create one on /agents first."
+                        : "Inherits the agent's model, system prompt, tools and knowledge bases."
+                    }
+                  >
+                    <select
+                      className="input"
+                      value={s.agentId}
+                      onChange={(e) => patch(i, { agentId: e.target.value })}
+                    >
+                      <option value="">(select an agent)</option>
+                      {eligible.map((a) => (
+                        <option key={a.id} value={a.id}>
+                          {a.name} — {a.modelRuntimeId}
+                          {a.knowledgeCount > 0 ? ` · ${a.knowledgeCount} KB` : ""}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                </div>
+              ) : (
+                <div className="mt-2">
+                  <Field label="Catalog model">
+                    <select
+                      className="input"
+                      value={s.modelId}
+                      onChange={(e) => patch(i, { modelId: e.target.value })}
+                    >
+                      <option value="">(select a model)</option>
+                      {models.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.name} — {m.inferenceProvider}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                </div>
+              )}
+
+              <div className="mt-2">
+                <Field label="Step instruction" required>
+                  <textarea
+                    className="input h-16"
+                    value={s.prompt}
+                    onChange={(e) => patch(i, { prompt: e.target.value })}
+                    placeholder="What this step should produce"
+                  />
+                </Field>
+              </div>
+            </div>
+          ))}
+          <button
+            type="button"
+            className="btn-ghost"
+            onClick={() =>
+              setSteps((cur) => [
+                ...cur,
+                {
+                  name: `Step ${cur.length + 1}`,
+                  mode: "agent",
+                  agentId: "",
+                  modelId: "",
+                  prompt: "",
+                  reviewGate: false,
+                },
+              ])
+            }
+          >
+            + Add step
+          </button>
+        </div>
+      </div>
+    </Modal>
   );
 }

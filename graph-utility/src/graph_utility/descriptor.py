@@ -25,18 +25,33 @@ from typing import Any, Optional
 class OntologySource:
     """Where the ontology (schema: classes/properties/relationships) lives.
 
-    `type` selects the ontology adapter used by the build plane. `neptune`
-    today; `rdf-file` / `rdflib` could be added without touching the engine.
+    `type` selects the ontology adapter used by the build plane.
+
+      neptune   AWS Neptune SPARQL endpoint (SigV4 + AssumeRole)
+      rdfox     RDFox datastore over its REST/SPARQL endpoint. Chosen when the
+                ontology needs *reasoning*: RDFox materialises Datalog/OWL 2 RL
+                rules incrementally, so a re-published mapping updates the
+                derived graph without re-deriving it wholesale. Commercial
+                licence; in-memory, so the graph is RAM-bound.
+      rdf-file  a local Turtle/RDF file (no server)
+      none      the backend graph IS the ontology (e.g. Neo4j)
     """
 
-    type: str  # "neptune" | "rdf-file" | ...
+    type: str  # "neptune" | "rdfox" | "rdf-file" | "none"
     sparql_url: Optional[str] = None       # Neptune /sparql endpoint
     graph_uri: Optional[str] = None        # named graph URI
     namespace: Optional[str] = None        # ontology namespace prefix (ma#)
     # Auth hint for the ontology endpoint (resolved at runtime, never stored raw)
-    auth: str = "sigv4-assume-role"        # "sigv4-assume-role" | "none"
+    auth: str = "sigv4-assume-role"        # "sigv4-assume-role" | "none" | "api-key-ref"
     role_arn: Optional[str] = None
     region: str = "us-east-1"
+    # --- RDFox only ---------------------------------------------------------
+    # Base URL of the RDFox endpoint, e.g. https://rdfox.internal:12110
+    rdfox_url: Optional[str] = None
+    # Datastore name within that server.
+    rdfox_datastore: Optional[str] = None
+    # Name of an env var / secret REFERENCE holding the API key. Never a key.
+    rdfox_auth_env_var: Optional[str] = None
 
 
 @dataclass
@@ -142,6 +157,14 @@ class GraphSource:
                 errs.append("ontology.graph_uri is required for type 'neptune'")
             if not self.ontology.namespace:
                 errs.append("ontology.namespace is required for type 'neptune'")
+        elif self.ontology.type == "rdfox":
+            # Reasoning engine: needs an endpoint + a datastore to query.
+            if not self.ontology.rdfox_url:
+                errs.append("ontology.rdfox_url is required for type 'rdfox'")
+            if not self.ontology.rdfox_datastore:
+                errs.append("ontology.rdfox_datastore is required for type 'rdfox'")
+            if not self.ontology.namespace:
+                errs.append("ontology.namespace is required for type 'rdfox'")
         elif self.ontology.type not in ("rdf-file", "none"):
             errs.append(f"unsupported ontology.type '{self.ontology.type}'")
 

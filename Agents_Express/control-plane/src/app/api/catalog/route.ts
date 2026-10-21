@@ -25,6 +25,12 @@ export async function POST(req: NextRequest) {
     modelProvider: body.modelProvider,
     modelId: body.modelId,
     inferenceProvider: body.inferenceProvider,
+    // Routing details for gateway- and Databricks-served models. `tokenEnvVar`
+    // is a REFERENCE to a server-side env var — never a token value.
+    ...(body.targetName ? { targetName: body.targetName } : {}),
+    ...(body.gatewayBaseUrl ? { gatewayBaseUrl: body.gatewayBaseUrl } : {}),
+    ...(body.inferenceApi ? { inferenceApi: body.inferenceApi } : {}),
+    ...(body.tokenEnvVar ? { tokenEnvVar: body.tokenEnvVar } : {}),
     createdAt: new Date().toISOString(),
   };
   store.models.unshift(model);
