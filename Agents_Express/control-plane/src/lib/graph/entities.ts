@@ -65,16 +65,18 @@ export interface AssetScope {
 // --------------------------------------------------------------------------- //
 
 export interface GraphSourceOntology {
-  type: "neptune";
-  sparqlUrl: string;
-  graphUri: string;
-  namespace: string;
+  // "neptune": external SPARQL ontology (Neptune). "none": the backend graph
+  // (e.g. Neo4j) is itself the ontology, so no external SPARQL endpoint exists.
+  type: "neptune" | "none";
+  sparqlUrl?: string;
+  graphUri?: string;
+  namespace?: string;
   auth?: "sigv4-assume-role";
   roleArn?: string;
   region?: string;
 }
 
-export interface GraphSourceBackend {
+export interface DatabricksUcBackend {
   type: "databricks-uc";
   catalog: string;
   schema: string;
@@ -89,6 +91,38 @@ export interface GraphSourceBackend {
   vectorIndex?: string;
   vectorEndpoint?: string;
 }
+
+/**
+ * A native graph backend (Neo4j / Aura) addressed over the Bolt protocol.
+ * Cypher executes DIRECTLY against the database — there is no external HTTP
+ * serving endpoint, so `queryEngineUrl` is unused for this backend.
+ *
+ * Credentials are referenced, never stored: the password/token is resolved at
+ * runtime from an env var or a SecretRef (`authSecret`). `uri` is a
+ * `neo4j`/`neo4j+s`/`bolt`/`bolt+s` Bolt URI (NOT an https URL), so it is
+ * validated by the Bolt-host SSRF check rather than the https serving check.
+ */
+export interface Neo4jBackend {
+  type: "neo4j";
+  /** Bolt connection URI, e.g. neo4j+s://<id>.databases.neo4j.io */
+  uri: string;
+  /** Target database name (Aura uses the instance id; community uses "neo4j"). */
+  database: string;
+  /** Username (non-secret). */
+  username: string;
+  /**
+   * Reference to the password/token. Resolved at runtime; never persisted.
+   * When omitted, the executor falls back to the NEO4J_PASSWORD env var.
+   */
+  authSecret?: SecretRef;
+}
+
+/**
+ * The persisted backend. A discriminated union keyed on `type`:
+ *   - databricks-uc : ontology→UC mapping resolved by an external serving URL
+ *   - neo4j         : native Cypher executed directly over Bolt
+ */
+export type GraphSourceBackend = DatabricksUcBackend | Neo4jBackend;
 
 /**
  * The persisted GraphSource entity. A superset of the legacy GraphSourceRecord

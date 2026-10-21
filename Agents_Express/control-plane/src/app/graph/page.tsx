@@ -1,7 +1,7 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
-import { Field, Modal, PageHeader, Pill } from "@/components/ui";
+import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
+import { Field, Modal, PageHeader, Pill, RadioCard } from "@/components/ui";
 import { getJSON, sendJSON } from "@/lib/api";
 import { GraphSourceConfig, GraphSourceRecord, RecordStatus } from "@/lib/types";
 
@@ -145,8 +145,12 @@ export default function GraphSourcesPage() {
               <p className="mt-3 text-sm text-slate-500">{source.description}</p>
               <div className="mt-4 flex flex-wrap gap-2">
                 <span className="badge bg-indigo-50 text-indigo-700">{source.bu}</span>
-                <span className="badge bg-slate-100 text-slate-600">Neptune</span>
-                <span className="badge bg-slate-100 text-slate-600">Unity Catalog</span>
+                {source.ontology.type === "neptune" && (
+                  <span className="badge bg-slate-100 text-slate-600">Neptune</span>
+                )}
+                <span className="badge bg-slate-100 text-slate-600">
+                  {source.backend.type === "neo4j" ? "Neo4j" : "Unity Catalog"}
+                </span>
               </div>
               <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-3 text-xs">
                 <span className={endpointConfigured(source.queryEngineUrl) ? "text-green-700" : "text-amber-700"}>
@@ -237,10 +241,21 @@ export default function GraphSourcesPage() {
           <section className="card p-6">
             <h2 className="mb-4 text-base font-semibold">Selected source configuration</h2>
             <div className="grid gap-5 text-sm md:grid-cols-2 xl:grid-cols-4">
-              <Detail label="Ontology" value={selected.ontology.graphUri} />
-              <Detail label="UC schema" value={`${selected.backend.catalog}.${selected.backend.schema}`} />
-              <Detail label="Registry table" value={selected.backend.registryTable} />
-              <Detail label="Universal join key" value={selected.backend.universalJoinKey} />
+              <Detail label="Ontology" value={selected.ontology.graphUri || `(${selected.ontology.type})`} />
+              {selected.backend.type === "neo4j" ? (
+                <>
+                  <Detail label="Backend" value="Neo4j (Bolt)" />
+                  <Detail label="Bolt URI" value={selected.backend.uri} />
+                  <Detail label="Database" value={selected.backend.database} />
+                  <Detail label="Username" value={selected.backend.username} />
+                </>
+              ) : (
+                <>
+                  <Detail label="UC schema" value={`${selected.backend.catalog}.${selected.backend.schema}`} />
+                  <Detail label="Registry table" value={selected.backend.registryTable} />
+                  <Detail label="Universal join key" value={selected.backend.universalJoinKey} />
+                </>
+              )}
             </div>
           </section>
         )}
@@ -262,26 +277,67 @@ function Detail({ label, value }: { label: string; value: string }) {
   return <div><div className="text-xs font-medium text-slate-400">{label}</div><div className="mono mt-1 break-all text-slate-700">{value}</div></div>;
 }
 
+type BackendKind = "databricks-uc" | "neo4j";
+
+// Default field values for each backend kind so switching is lossless per kind.
+const DATABRICKS_DEFAULT = {
+  type: "databricks-uc" as const,
+  catalog: "",
+  schema: "",
+  registryTable: "",
+  universalJoinKey: "",
+};
+const NEO4J_DEFAULT = {
+  type: "neo4j" as const,
+  uri: "",
+  database: "neo4j",
+  username: "neo4j",
+  authEnvVar: "NEO4J_PASSWORD",
+};
+
 function RegisterModal({ onClose, onCreated }: { onClose: () => void; onCreated: () => Promise<void> }) {
   const [source, setSource] = useState(EMPTY_SOURCE);
+  const [backendKind, setBackendKind] = useState<BackendKind>("databricks-uc");
+  // Hold each backend's draft separately so toggling doesn't lose input.
+  const [dbx, setDbx] = useState({ ...DATABRICKS_DEFAULT });
+  const [neo, setNeo] = useState({ ...NEO4J_DEFAULT });
   const [allowedHostsText, setAllowedHostsText] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const patch = (values: Partial<GraphSourceConfig>) => setSource((current) => ({ ...current, ...values }));
-  const ontology = (values: Partial<GraphSourceConfig["ontology"]>) => patch({ ontology: { ...source.ontology, ...values } });
-  const backend = (values: Partial<GraphSourceConfig["backend"]>) => patch({ backend: { ...source.backend, ...values } });
+  const ontology = (values: Partial<GraphSourceConfig["ontology"]>) =>
+    patch({ ontology: { ...source.ontology, ...values } });
+  const isNeo4j = backendKind === "neo4j";
 
   async function register() {
     setBusy(true); setError("");
     try {
       // Split the comma/space/newline-separated allowed-host list into an
-      // allowlist. A configured (non-placeholder) queryEngineUrl requires a
-      // non-empty allowlist that matches its hostname (enforced server-side).
+      // allowlist. A configured (non-placeholder) serving URL / Bolt host
+      // requires a non-empty allowlist that matches its hostname (enforced
+      // server-side).
       const allowedHosts = allowedHostsText
         .split(/[\s,]+/)
         .map((h) => h.trim())
         .filter(Boolean);
-      await sendJSON("/api/graph", "POST", { op: "register", source: { ...source, allowedHosts } });
+
+      // A native neo4j backend IS its own ontology and has no external serving
+      // URL, so we send ontology.type "none" and drop queryEngineUrl.
+      const payload: GraphSourceConfig & { allowedHosts: string[] } = isNeo4j
+        ? {
+            ...source,
+            ontology: { ...source.ontology, type: "none" },
+            backend: { ...neo },
+            queryEngineUrl: "",
+            allowedHosts,
+          }
+        : {
+            ...source,
+            ontology: { ...source.ontology, type: "neptune" },
+            backend: { ...dbx },
+            allowedHosts,
+          };
+      await sendJSON("/api/graph", "POST", { op: "register", source: payload });
       await onCreated();
     } catch (e) {
       setError((e as Error).message); setBusy(false);
@@ -289,32 +345,114 @@ function RegisterModal({ onClose, onCreated }: { onClose: () => void; onCreated:
   }
 
   return (
-    <Modal title="Register Graph Source" subtitle="The source starts as Draft and must pass approval before queries can route." onClose={onClose}
+    <Modal title="Register Graph Source" subtitle="The source starts as Draft and must pass approval before queries can route." onClose={onClose} size="lg"
       footer={<><button className="btn-ghost" onClick={onClose}>Cancel</button><button className="btn-primary" disabled={busy} onClick={register}>{busy ? "Registering…" : "Create draft"}</button></>}>
-      <div className="space-y-4">
-        {error && <div className="rounded bg-red-50 p-3 text-sm text-red-700">{error}</div>}
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Source ID" required><input className="input" value={source.graphSourceId} onChange={(e) => patch({ graphSourceId: e.target.value })} placeholder="contract-iq" /></Field>
-          <Field label="Business unit" required><input className="input" value={source.bu} onChange={(e) => patch({ bu: e.target.value })} placeholder="market-access" /></Field>
-        </div>
-        <Field label="Display name" required><input className="input" value={source.displayName} onChange={(e) => patch({ displayName: e.target.value })} /></Field>
-        <Field label="Description"><input className="input" value={source.description} onChange={(e) => patch({ description: e.target.value })} /></Field>
-        <div className="border-t border-slate-100 pt-4 text-sm font-semibold">Neptune ontology</div>
-        <Field label="SPARQL URL" required><input className="input" value={source.ontology.sparqlUrl} onChange={(e) => ontology({ sparqlUrl: e.target.value })} placeholder="https://…:8182/sparql" /></Field>
-        <Field label="Graph URI" required><input className="input" value={source.ontology.graphUri} onChange={(e) => ontology({ graphUri: e.target.value })} /></Field>
-        <Field label="Namespace" required><input className="input" value={source.ontology.namespace} onChange={(e) => ontology({ namespace: e.target.value })} /></Field>
-        <div className="border-t border-slate-100 pt-4 text-sm font-semibold">Unity Catalog backend</div>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Catalog" required><input className="input" value={source.backend.catalog} onChange={(e) => backend({ catalog: e.target.value })} /></Field>
-          <Field label="Schema" required><input className="input" value={source.backend.schema} onChange={(e) => backend({ schema: e.target.value })} /></Field>
-        </div>
-        <Field label="Registry table" required><input className="input" value={source.backend.registryTable} onChange={(e) => backend({ registryTable: e.target.value })} placeholder="catalog.schema.omda_ontology_mapping" /></Field>
-        <Field label="Universal join key" required><input className="input" value={source.backend.universalJoinKey} onChange={(e) => backend({ universalJoinKey: e.target.value })} /></Field>
-        <Field label="LLM endpoint" required><input className="input" value={source.llmEndpoint} onChange={(e) => patch({ llmEndpoint: e.target.value })} /></Field>
-        <Field label="Query engine URL" hint="May be left empty for preview-only setup."><input className="input" value={source.queryEngineUrl} onChange={(e) => patch({ queryEngineUrl: e.target.value })} placeholder="https://…/serving-endpoints/…/invocations" /></Field>
-        <Field label="Allowed serving hosts" hint="Required when a live (non-placeholder) query engine URL is set. Comma- or space-separated hostnames, e.g. ws.databricks.com"><input className="input" value={allowedHostsText} onChange={(e) => setAllowedHostsText(e.target.value)} placeholder="ws.databricks.com" /></Field>
+      <div className="space-y-6">
+        {error && <div className="rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
+
+        <FormSection title="Identity" description="How this source is identified across the control plane.">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Source ID" required><input className="input" value={source.graphSourceId} onChange={(e) => patch({ graphSourceId: e.target.value })} placeholder="contract-iq" /></Field>
+            <Field label="Business unit" required><input className="input" value={source.bu} onChange={(e) => patch({ bu: e.target.value })} placeholder="market-access" /></Field>
+            <div className="sm:col-span-2">
+              <Field label="Display name" required><input className="input" value={source.displayName} onChange={(e) => patch({ displayName: e.target.value })} placeholder="Contract Intelligence" /></Field>
+            </div>
+            <div className="sm:col-span-2">
+              <Field label="Description"><input className="input" value={source.description} onChange={(e) => patch({ description: e.target.value })} placeholder="Short summary of what this graph exposes" /></Field>
+            </div>
+          </div>
+        </FormSection>
+
+        <FormSection title="Backend" description="Where queries execute. Neo4j runs Cypher directly over Bolt; Databricks resolves an ontology→table mapping via a serving endpoint.">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <RadioCard
+              selected={!isNeo4j}
+              onClick={() => setBackendKind("databricks-uc")}
+              title="Databricks + Neptune"
+              description="Ontology-mediated access to Unity Catalog via a serving endpoint."
+              icon="▦"
+            />
+            <RadioCard
+              selected={isNeo4j}
+              onClick={() => setBackendKind("neo4j")}
+              title="Neo4j (Bolt)"
+              description="Execute read-only Cypher directly against a Neo4j / Aura database."
+              icon="⬡"
+            />
+          </div>
+        </FormSection>
+
+        {isNeo4j ? (
+          <FormSection title="Neo4j connection" description="Bolt endpoint and credentials. The password is read at runtime from an env var and never stored.">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="sm:col-span-2">
+                <Field label="Bolt URI" required><input className="input" value={neo.uri} onChange={(e) => setNeo((c) => ({ ...c, uri: e.target.value }))} placeholder="neo4j+s://xxxx.databases.neo4j.io" /></Field>
+              </div>
+              <Field label="Database" required><input className="input" value={neo.database} onChange={(e) => setNeo((c) => ({ ...c, database: e.target.value }))} placeholder="neo4j" /></Field>
+              <Field label="Username" required><input className="input" value={neo.username} onChange={(e) => setNeo((c) => ({ ...c, username: e.target.value }))} placeholder="neo4j" /></Field>
+              <div className="sm:col-span-2">
+                <Field label="Password env var" hint="Name of the server-side environment variable holding the password/token. Defaults to NEO4J_PASSWORD."><input className="input" value={neo.authEnvVar} onChange={(e) => setNeo((c) => ({ ...c, authEnvVar: e.target.value }))} placeholder="NEO4J_PASSWORD" /></Field>
+              </div>
+            </div>
+          </FormSection>
+        ) : (
+          <>
+            <FormSection title="Neptune ontology" description="SPARQL endpoint and named graph backing the ontology layer.">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="sm:col-span-2">
+                  <Field label="SPARQL URL" required><input className="input" value={source.ontology.sparqlUrl ?? ""} onChange={(e) => ontology({ sparqlUrl: e.target.value })} placeholder="https://…:8182/sparql" /></Field>
+                </div>
+                <Field label="Graph URI" required><input className="input" value={source.ontology.graphUri ?? ""} onChange={(e) => ontology({ graphUri: e.target.value })} placeholder="urn:bu:market-access:ontology" /></Field>
+                <Field label="Namespace" required><input className="input" value={source.ontology.namespace ?? ""} onChange={(e) => ontology({ namespace: e.target.value })} placeholder="omda" /></Field>
+              </div>
+            </FormSection>
+
+            <FormSection title="Unity Catalog backend" description="Where the ontology→table mappings and data live.">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field label="Catalog" required><input className="input" value={dbx.catalog} onChange={(e) => setDbx((c) => ({ ...c, catalog: e.target.value }))} placeholder="prod" /></Field>
+                <Field label="Schema" required><input className="input" value={dbx.schema} onChange={(e) => setDbx((c) => ({ ...c, schema: e.target.value }))} placeholder="market_access" /></Field>
+                <div className="sm:col-span-2">
+                  <Field label="Registry table" required><input className="input" value={dbx.registryTable} onChange={(e) => setDbx((c) => ({ ...c, registryTable: e.target.value }))} placeholder="catalog.schema.omda_ontology_mapping" /></Field>
+                </div>
+                <div className="sm:col-span-2">
+                  <Field label="Universal join key" required><input className="input" value={dbx.universalJoinKey} onChange={(e) => setDbx((c) => ({ ...c, universalJoinKey: e.target.value }))} placeholder="entity_id" /></Field>
+                </div>
+              </div>
+            </FormSection>
+          </>
+        )}
+
+        <FormSection title="Serving &amp; routing" description={isNeo4j ? "Cypher runs directly over Bolt — no external query engine URL is used." : "Endpoints used to generate and run governed queries."}>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="sm:col-span-2">
+              <Field label="LLM endpoint" required><input className="input" value={source.llmEndpoint} onChange={(e) => patch({ llmEndpoint: e.target.value })} placeholder={isNeo4j ? "bedrock/anthropic.claude-3-5-sonnet" : "https://…/serving-endpoints/…/invocations"} /></Field>
+            </div>
+            {!isNeo4j && (
+              <div className="sm:col-span-2">
+                <Field label="Query engine URL" hint="May be left empty for preview-only setup."><input className="input" value={source.queryEngineUrl} onChange={(e) => patch({ queryEngineUrl: e.target.value })} placeholder="https://…/serving-endpoints/…/invocations" /></Field>
+              </div>
+            )}
+            <div className="sm:col-span-2">
+              <Field label="Allowed hosts" hint={isNeo4j ? "Required: the Bolt host must be allowlisted, e.g. databases.neo4j.io" : "Required when a live (non-placeholder) query engine URL is set. Comma- or space-separated hostnames, e.g. ws.databricks.com"}><input className="input" value={allowedHostsText} onChange={(e) => setAllowedHostsText(e.target.value)} placeholder={isNeo4j ? "databases.neo4j.io" : "ws.databricks.com"} /></Field>
+            </div>
+          </div>
+        </FormSection>
       </div>
     </Modal>
+  );
+}
+
+// Grouped section inside a form: a titled block with an optional description and
+// a thin divider so long modals read as discrete, aligned steps.
+function FormSection({ title, description, children }: { title: string; description?: string; children: ReactNode }) {
+  return (
+    <section className="space-y-3">
+      <div className="border-b border-slate-100 pb-2">
+        <h3 className="text-sm font-semibold text-slate-800">{title}</h3>
+        {description && <p className="mt-0.5 text-xs text-slate-500">{description}</p>}
+      </div>
+      {children}
+    </section>
   );
 }
 

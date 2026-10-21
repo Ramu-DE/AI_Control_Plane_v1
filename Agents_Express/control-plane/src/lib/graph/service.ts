@@ -132,29 +132,44 @@ export function validateRegistration(input: RegisterInput): string | null {
   if (!input.graphSourceId?.trim() || !input.bu?.trim() || !input.displayName?.trim()) {
     return "graphSourceId, bu and displayName are required";
   }
-  if (
-    !input.ontology?.sparqlUrl?.trim() ||
-    !input.ontology.graphUri?.trim() ||
-    !input.ontology.namespace?.trim()
-  ) {
-    return "ontology sparqlUrl, graphUri and namespace are required";
+  // Ontology is required only for the Neptune (external SPARQL) type. A native
+  // graph backend (neo4j) IS its own ontology and uses ontology.type "none".
+  if (input.ontology?.type === "neptune") {
+    if (
+      !input.ontology?.sparqlUrl?.trim() ||
+      !input.ontology.graphUri?.trim() ||
+      !input.ontology.namespace?.trim()
+    ) {
+      return "ontology sparqlUrl, graphUri and namespace are required for a neptune ontology";
+    }
   }
-  if (
-    !input.backend?.catalog?.trim() ||
-    !input.backend.schema?.trim() ||
-    !input.backend.registryTable?.trim()
-  ) {
-    return "backend catalog, schema and registryTable are required";
+
+  // Backend validation is per-type (discriminated union).
+  if (input.backend?.type === "neo4j") {
+    if (!input.backend.uri?.trim()) return "backend uri is required for type 'neo4j'";
+    if (!input.backend.database?.trim()) return "backend database is required for type 'neo4j'";
+    if (!input.backend.username?.trim()) return "backend username is required for type 'neo4j'";
+  } else if (input.backend?.type === "databricks-uc") {
+    if (
+      !input.backend.catalog?.trim() ||
+      !input.backend.schema?.trim() ||
+      !input.backend.registryTable?.trim()
+    ) {
+      return "backend catalog, schema and registryTable are required";
+    }
+    // The legacy databricks-uc engine joins on a single key, so it must be
+    // supplied explicitly for that backend. There is NO default — a source must
+    // never inherit another tenant's join key. The precision build/plan path
+    // derives joins per-relationship and does not require this field.
+    if (!input.backend.universalJoinKey?.trim()) {
+      return "backend universalJoinKey is required for type 'databricks-uc'";
+    }
+  } else {
+    return "backend.type must be 'databricks-uc' or 'neo4j'";
   }
+
   if (!input.llmEndpoint?.trim()) {
     return "llmEndpoint is required";
-  }
-  // The legacy databricks-uc engine joins on a single key, so it must be
-  // supplied explicitly for that backend. There is NO default — a source must
-  // never inherit another tenant's join key. The precision build/plan path
-  // derives joins per-relationship and does not require this field.
-  if (input.backend.type === "databricks-uc" && !input.backend.universalJoinKey?.trim()) {
-    return "backend universalJoinKey is required for type 'databricks-uc'";
   }
 
   // SSRF: any provided outbound URL must pass HTTPS + allowlist/private checks.
@@ -175,7 +190,7 @@ export function validateRegistration(input: RegisterInput): string | null {
       if (!r.ok) return `queryEngineUrl rejected: ${r.reason}`;
     }
   }
-  if (input.ontology.sparqlUrl?.trim()) {
+  if (input.ontology?.type === "neptune" && input.ontology.sparqlUrl?.trim()) {
     const r = validateOutboundUrl(input.ontology.sparqlUrl.trim(), allowed);
     if (!r.ok && !r.placeholder) return `ontology.sparqlUrl rejected: ${r.reason}`;
   }
@@ -422,7 +437,11 @@ export async function publishMappingVersion(
     status: "published",
     buildRunId,
     proposalIds: includedIds,
-    artifactRef: { registryTable: source.backend.registryTable, checksum },
+    artifactRef: {
+      registryTable:
+        source.backend.type === "databricks-uc" ? source.backend.registryTable : undefined,
+      checksum,
+    },
     publishedBy,
     publishedAt: now,
     rev: 1,

@@ -390,23 +390,35 @@ export interface GraphSourceConfig {
   displayName: string;
   description: string;
   ontology: {
-    type: "neptune";
-    sparqlUrl: string;
-    graphUri: string;
-    namespace: string;
+    type: "neptune" | "none";
+    sparqlUrl?: string;
+    graphUri?: string;
+    namespace?: string;
     auth?: "sigv4-assume-role";
     roleArn?: string;
     region?: string;
   };
-  backend: {
-    type: "databricks-uc";
-    catalog: string;
-    schema: string;
-    registryTable: string;
-    universalJoinKey: string;
-    vectorIndex?: string;
-    vectorEndpoint?: string;
-  };
+  backend:
+    | {
+        type: "databricks-uc";
+        catalog: string;
+        schema: string;
+        registryTable: string;
+        universalJoinKey: string;
+        vectorIndex?: string;
+        vectorEndpoint?: string;
+      }
+    | {
+        type: "neo4j";
+        /** Bolt URI, e.g. neo4j+s://<id>.databases.neo4j.io */
+        uri: string;
+        /** Target database name. */
+        database: string;
+        /** Username (non-secret). */
+        username: string;
+        /** Env var name holding the password/token (resolved at runtime). */
+        authEnvVar?: string;
+      };
   llmEndpoint: string;
   queryEngineUrl: string;
   tags: Record<string, string>;

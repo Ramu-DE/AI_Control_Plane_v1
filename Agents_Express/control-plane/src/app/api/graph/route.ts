@@ -11,9 +11,15 @@ import {
   VersionConflictError,
 } from "@/lib/graph/service";
 import { isConfiguredServingUrl } from "@/lib/graph/logic";
+import {
+  isConfiguredBoltUri,
+  runReadQuery,
+  isNeo4jError,
+} from "@/lib/graph/neo4j";
+import { buildCypher } from "@/lib/graph/cypher";
 import { GraphControlConfigError } from "@/lib/graph/factory";
 import type { RegisterInput } from "@/lib/graph/service";
-import type { GraphSource, MappingVersion } from "@/lib/graph/entities";
+import type { GraphSource, MappingVersion, Neo4jBackend } from "@/lib/graph/entities";
 import type { RecordStatus } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -27,6 +33,8 @@ type QueryBody = {
   question: string;
   limit?: number;
   preview?: boolean;
+  /** Optional explicit read-only Cypher (neo4j backends only). */
+  cypher?: string;
 };
 type Body = RegisterBody | QueryBody;
 
@@ -188,6 +196,89 @@ export async function POST(req: NextRequest) {
   };
 
   const targetConfigured = isConfiguredServingUrl(source.queryEngineUrl, source.allowedHosts);
+
+  // ----------------------------------------------------------------------- //
+  // Neo4j backend: execute Cypher DIRECTLY over Bolt (no external serving URL,
+  // no published-mapping requirement — the graph is self-describing). Policy
+  // has already been evaluated and allowed above.
+  // ----------------------------------------------------------------------- //
+  if (source.backend.type === "neo4j") {
+    const neo4jBackend = source.backend as Neo4jBackend;
+    const boltConfigured = isConfiguredBoltUri(neo4jBackend.uri, source.allowedHosts);
+
+    let plan;
+    try {
+      plan = buildCypher(body.question.trim(), limit, body.cypher);
+    } catch (e) {
+      // Unsafe (non-read-only) explicit Cypher, etc.
+      return NextResponse.json({ error: (e as Error).message, code: "UNSAFE_CYPHER" }, { status: 400 });
+    }
+
+    if (body.preview) {
+      logAudit({
+        category: "graph",
+        action: "preview-query",
+        actor,
+        detail: `ALLOW Cypher routing preview for '${source.graphSourceId}'`,
+      });
+      return NextResponse.json({
+        mode: "preview",
+        backend: "neo4j",
+        graphSourceId: source.graphSourceId,
+        targetConfigured: boltConfigured,
+        target: neo4jBackend.uri,
+        database: neo4jBackend.database,
+        cypher: plan.cypher,
+        params: plan.params,
+        planSource: plan.source,
+        decision,
+        message: `Policy passed. ${plan.note} Preview stopped before opening the Bolt session.`,
+      });
+    }
+
+    if (!boltConfigured) {
+      return NextResponse.json(
+        {
+          error:
+            "This Neo4j Graph Source uses a placeholder or non-allowlisted Bolt URI. Configure backend.uri or use routing preview.",
+        },
+        { status: 503 }
+      );
+    }
+
+    try {
+      const result = await runReadQuery(neo4jBackend, plan.cypher, plan.params, {
+        limit,
+        timeoutMs: 25_000,
+      });
+      logAudit({
+        category: "graph",
+        action: "query",
+        actor,
+        detail: `ALLOW Cypher query to '${source.graphSourceId}' (${result.rowCount} rows)`,
+      });
+      return NextResponse.json({
+        mode: "live",
+        backend: "neo4j",
+        graphSourceId: source.graphSourceId,
+        decision,
+        cypher: plan.cypher,
+        planSource: plan.source,
+        result,
+      });
+    } catch (error) {
+      const message = isNeo4jError(error)
+        ? `Neo4j error [${(error as { code?: string }).code ?? "unknown"}]: ${(error as Error).message}`
+        : (error as Error).message || "Neo4j query failed";
+      logAudit({
+        category: "graph",
+        action: "query-error",
+        actor,
+        detail: `Cypher query failed for '${source.graphSourceId}': ${message}`,
+      });
+      return NextResponse.json({ error: message }, { status: 502 });
+    }
+  }
 
   if (body.preview) {
     logAudit({

@@ -26,3 +26,8 @@ Agents_Express/aws-audit/logs/
 .DS_Store
 .vscode/
 .idea/
+
+# ---- Secrets / credential exports (never commit) ----
+# Neo4j Aura connection-detail exports contain a live password.
+Neo4j-*.txt
+*.env.local
