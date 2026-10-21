@@ -90,6 +90,29 @@ from .planner import (
     CompileError,
 )
 
+# --- agentic hybrid-RAG (router + critic + pipeline) ---
+from .router import (
+    QuestionKind,
+    Route,
+    RerouteSignal,
+    DEFAULT_RETRIEVER,
+    ESCALATION_ORDER,
+    classify,
+    reroute,
+)
+from .critic import (
+    Verdict,
+    CriticThresholds,
+    evaluate,
+)
+from .pipeline import (
+    RetrieverRegistry,
+    Attempt,
+    PipelineResult,
+    Synthesizer,
+    run,
+)
+
 __all__ = [
     # legacy
     "GraphSource", "OntologySource", "BackendSource", "GraphSourceRegistry",
@@ -118,6 +141,11 @@ __all__ = [
     "CompiledQuery", "SemanticPlanner", "SqlCompiler", "ConceptRef", "AggKind",
     "FilterOp", "PlanningError", "UnmappedConceptError", "AmbiguousConceptError",
     "CompileError",
+    # agentic hybrid-RAG
+    "QuestionKind", "Route", "RerouteSignal", "DEFAULT_RETRIEVER",
+    "ESCALATION_ORDER", "classify", "reroute",
+    "Verdict", "CriticThresholds", "evaluate",
+    "RetrieverRegistry", "Attempt", "PipelineResult", "Synthesizer", "run",
 ]
 
 __version__ = "0.2.0"
