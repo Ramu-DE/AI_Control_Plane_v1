@@ -3,7 +3,7 @@
 // app is served behind a path prefix (e.g. code-server's /proxy/3000).
 const BASE = process.env.NEXT_PUBLIC_BASE_PATH || "";
 
-function withBase(url: string): string {
+export function withBase(url: string): string {
   if (url.startsWith("http")) return url;
   return `${BASE}${url}`;
 }

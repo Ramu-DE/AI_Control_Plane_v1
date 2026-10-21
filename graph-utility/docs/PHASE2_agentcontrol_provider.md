@@ -6,10 +6,9 @@ serving endpoint), applies **Cedar** policy, and routes the natural-language
 question to the generic OMDA engine — handling the knowledge graph **with
 precision**, for any BU.
 
-> This document is **design only**. It does not modify the running control-plane
-> app. It describes the additive changes (types, API route, UI, Cedar) needed to
-> make "Graph Source" a first-class, governed provider — mirroring how Knowledge
-> Bases / Qdrant were added.
+**Status:** Implemented in `Agents_Express/control-plane/` with a local routing-preview
+mode and live Databricks Model Serving forwarding when an approved source has a
+configured endpoint. This document remains the contract and design rationale.
 
 ---
 

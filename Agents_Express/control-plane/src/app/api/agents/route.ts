@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { store, newId, logAudit } from "@/lib/store";
 import { getTierConfig } from "@/lib/tiers";
 import { AgentConfig } from "@/lib/types";
+import { defaultAgentCompute, isAgentCompute } from "@/lib/runtimes";
 
 export async function GET() {
   return NextResponse.json(store.agents);
@@ -96,6 +97,18 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  const compute =
+    body.compute === undefined ? defaultAgentCompute() : body.compute;
+  if (!isAgentCompute(compute)) {
+    return NextResponse.json(
+      {
+        error:
+          "compute must contain a valid agentRuntimeId and modelRuntimeId from /api/runtimes",
+      },
+      { status: 400 }
+    );
+  }
+
   const agent: AgentConfig = {
     id: newId("agent"),
     name: body.name,
@@ -105,7 +118,7 @@ export async function POST(req: NextRequest) {
     systemPrompt: body.systemPrompt ?? "",
     toolRefs,
     knowledgeRefs,
-    compute: body.compute ?? { runtime: "Bedrock AgentCore" },
+    compute,
     visibility: body.visibility ?? "private",
     status: body.status ?? "draft",
     createdAt: new Date().toISOString(),

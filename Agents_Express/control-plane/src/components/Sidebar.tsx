@@ -35,6 +35,8 @@ const ICONS = {
   settings:
     "M12 15a3 3 0 100-6 3 3 0 000 6zM19 12a7 7 0 00-.1-1l2-1.5-2-3.5-2.4 1a7 7 0 00-1.7-1L14.5 2h-5l-.3 2.5a7 7 0 00-1.7 1l-2.4-1-2 3.5L2.1 11a7 7 0 000 2l-2 1.5 2 3.5 2.4-1a7 7 0 001.7 1L9.5 22h5l.3-2.5a7 7 0 001.7-1l2.4 1 2-3.5-2-1.5a7 7 0 00.1-1z",
   plus: "M12 5v14M5 12h14",
+  // Cloud outline — live AWS resources page.
+  cloud: "M7 18a4 4 0 010-8 5 5 0 019.6-1.3A3.5 3.5 0 0117 18H7z",
 };
 
 interface NavItem {
@@ -65,8 +67,11 @@ const GROUPS: NavGroup[] = [
     ],
   },
   {
-    title: "Tool Management",
-    items: [{ href: "/registry", label: "Registry", icon: "registry" }],
+    title: "Tool & Data Management",
+    items: [
+      { href: "/registry", label: "Registry", icon: "registry" },
+      { href: "/graph", label: "Graph Sources", icon: "gateway" },
+    ],
   },
   {
     title: "Testing",
@@ -79,6 +84,7 @@ const GROUPS: NavGroup[] = [
     title: "Platform",
     items: [
       { href: "/tenants", label: "Tenants", icon: "agents" },
+      { href: "/aws-resources", label: "AWS Resources", icon: "cloud" },
       { href: "/settings", label: "Settings", icon: "settings" },
     ],
   },

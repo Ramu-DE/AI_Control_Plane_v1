@@ -10,7 +10,15 @@ import {
   EmptyState,
   Modal,
 } from "@/components/ui";
+import { AwsModeBadge } from "@/components/AwsModeBadge";
 import { getJSON, sendJSON } from "@/lib/api";
+import {
+  defaultAgentCompute,
+  getRuntimeOption,
+  groupRuntimeOptions,
+  normalizeAgentCompute,
+} from "@/lib/runtimes";
+import type { AgentCompute, RuntimeOption, RuntimePlane } from "@/lib/runtimes";
 import {
   AgentConfig,
   AgentVisibility,
@@ -63,11 +71,14 @@ export default function AgentsPage() {
     <>
       <PageHeader
         title="Agents"
-        subtitle="Declarative agents — model, prompt, tools, compute. AgentCore Runtime builds them at invocation."
+        subtitle="Declarative agents with independently selected execution and model runtimes across AWS and Databricks."
         action={
-          <button className="btn-primary" onClick={() => setShowCreate(true)}>
-            + Create Agent
-          </button>
+          <div className="flex items-center gap-2">
+            <AwsModeBadge />
+            <button className="btn-primary" onClick={() => setShowCreate(true)}>
+              + Create Agent
+            </button>
+          </div>
         }
       />
       <div className="px-8 pb-10">
@@ -138,6 +149,7 @@ function CreateAgentModal({
     systemPrompt: "",
     toolRefs: [] as string[],
     knowledgeRefs: [] as string[],
+    compute: defaultAgentCompute(),
     visibility: "private" as AgentVisibility,
   });
   const [error, setError] = useState<string | null>(null);
@@ -165,7 +177,6 @@ function CreateAgentModal({
     try {
       await sendJSON("/api/agents", "POST", {
         ...form,
-        compute: { runtime: "Bedrock AgentCore" },
         status: "ready",
       });
       onCreated();
@@ -177,7 +188,7 @@ function CreateAgentModal({
   return (
     <Modal
       title="Create Agent"
-      subtitle="Define a declarative agent: model, prompt, tools."
+      subtitle="Define the model, tools, and runtime topology for a declarative agent."
       onClose={onClose}
       footer={
         <>
@@ -237,6 +248,46 @@ function CreateAgentModal({
               </option>
             ))}
           </select>
+        </Field>
+        <Field
+          label="Agent execution runtime"
+          hint="Where the agent process, server, and tool orchestration run."
+          required
+        >
+          <RuntimeSelect
+            plane="agentic-workload"
+            value={form.compute.agentRuntimeId}
+            onChange={(agentRuntimeId) =>
+              setForm({
+                ...form,
+                compute: {
+                  ...form.compute,
+                  agentRuntimeId:
+                    agentRuntimeId as AgentCompute["agentRuntimeId"],
+                },
+              })
+            }
+          />
+        </Field>
+        <Field
+          label="Model inference / fine-tuning runtime"
+          hint="Where models are served, trained, or fine-tuned; this may use a different provider."
+          required
+        >
+          <RuntimeSelect
+            plane="model-inference"
+            value={form.compute.modelRuntimeId}
+            onChange={(modelRuntimeId) =>
+              setForm({
+                ...form,
+                compute: {
+                  ...form.compute,
+                  modelRuntimeId:
+                    modelRuntimeId as AgentCompute["modelRuntimeId"],
+                },
+              })
+            }
+          />
         </Field>
         <Field label="System prompt">
           <textarea
@@ -343,6 +394,9 @@ function AgentDetail({
   const knowledge = agent.knowledgeRefs
     .map((id) => approved.find((r) => r.id === id))
     .filter(Boolean) as RegistryRecord[];
+  const compute = normalizeAgentCompute(agent.compute);
+  const agentRuntime = getRuntimeOption(compute.agentRuntimeId);
+  const modelRuntime = getRuntimeOption(compute.modelRuntimeId);
 
   const navItems: { key: SubTab; label: string; icon: string }[] = [
     { key: "general", label: "General", icon: "⚙" },
@@ -541,29 +595,124 @@ function AgentDetail({
 
           {tab === "compute" && (
             <div className="card p-6">
-              <h2 className="text-base font-semibold">Compute Runtime</h2>
+              <h2 className="text-base font-semibold">Runtime Topology</h2>
               <p className="mt-0.5 text-sm text-slate-500">
-                This agent runs on Amazon Bedrock AgentCore, the platform&apos;s
-                managed compute runtime.
+                Agent execution and model compute are separate planes. Mix AWS
+                and Databricks when the workload architecture requires it.
               </p>
-              <div className="mt-4 flex items-start gap-3 rounded-lg border border-slate-200 p-4">
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-gradient-to-br from-indigo-500 to-purple-500 text-white">
-                  ◇
-                </div>
-                <div>
-                  <div className="font-medium">Bedrock AgentCore</div>
-                  <div className="mt-0.5 text-sm text-slate-500">
-                    Fully managed runtime powered by Amazon Bedrock AgentCore.
-                    Handles scaling, orchestration, and tool execution
-                    automatically.
-                  </div>
-                </div>
+              <div className="mt-4 grid gap-4 xl:grid-cols-2">
+                <RuntimeCard
+                  title="Agentic Workload Service"
+                  option={agentRuntime}
+                />
+                <RuntimeCard
+                  title="Model Inference and Fine-Tuning Service"
+                  option={modelRuntime}
+                />
               </div>
             </div>
           )}
         </div>
       </div>
     </>
+  );
+}
+
+function RuntimeSelect({
+  plane,
+  value,
+  onChange,
+}: {
+  plane: RuntimePlane;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const groups = groupRuntimeOptions(plane);
+  const selected = getRuntimeOption(value);
+
+  return (
+    <>
+      <select
+        className="input"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      >
+        {groups.map((group) => (
+          <optgroup
+            key={group.key}
+            label={`${group.provider} — ${group.family}`}
+          >
+            {group.options.map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.label}
+                {"recommended" in option && option.recommended
+                  ? " (recommended)"
+                  : ""}
+              </option>
+            ))}
+          </optgroup>
+        ))}
+      </select>
+      {selected && (
+        <div className="mt-2 rounded-lg bg-slate-50 px-3 py-2">
+          <div className="text-xs text-slate-600">{selected.description}</div>
+          <div className="mt-1 flex flex-wrap gap-1">
+            {selected.capabilities.map((capability) => (
+              <span key={capability} className="badge bg-white text-slate-500">
+                {capability}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+function RuntimeCard({
+  title,
+  option,
+}: {
+  title: string;
+  option: RuntimeOption | undefined;
+}) {
+  if (!option) {
+    return (
+      <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+        Runtime configuration is unavailable.
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-lg border border-slate-200 p-4">
+      <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+        {title}
+      </div>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <div className="font-medium">{option.label}</div>
+        <span
+          className={`badge ${
+            option.provider === "AWS"
+              ? "bg-orange-50 text-orange-700"
+              : "bg-red-50 text-red-700"
+          }`}
+        >
+          {option.provider}
+        </span>
+      </div>
+      <div className="mt-1 text-xs font-medium text-slate-500">
+        {option.family}
+      </div>
+      <p className="mt-2 text-sm text-slate-500">{option.description}</p>
+      <div className="mt-3 flex flex-wrap gap-1.5">
+        {option.capabilities.map((capability) => (
+          <span key={capability} className="badge bg-slate-100 text-slate-600">
+            {capability}
+          </span>
+        ))}
+      </div>
+    </div>
   );
 }
 

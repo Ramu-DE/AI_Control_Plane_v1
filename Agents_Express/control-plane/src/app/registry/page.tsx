@@ -12,6 +12,7 @@ import {
   Pill,
   EmptyState,
 } from "@/components/ui";
+import { AwsModeBadge } from "@/components/AwsModeBadge";
 import { getJSON, sendJSON } from "@/lib/api";
 import {
   CredentialType,
@@ -115,9 +116,12 @@ export default function RegistryPage() {
         title="Tool/Agent Registry"
         subtitle="Manage your registries for organizing agents and tools."
         action={
-          <button className="btn-primary" onClick={() => setShowRegModal(true)}>
-            + Create Registry
-          </button>
+          <div className="flex items-center gap-2">
+            <AwsModeBadge />
+            <button className="btn-primary" onClick={() => setShowRegModal(true)}>
+              + Create Registry
+            </button>
+          </div>
         }
       />
       <div className="px-8 pb-10">

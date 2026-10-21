@@ -62,7 +62,9 @@ class ConceptExtractor:
         matched, seen = [], set()
         for alias in sorted(self.alias_index, key=len, reverse=True):
             entry = self.alias_index[alias]
-            if alias in q and entry["ontology_uri"] not in seen:
+            # Match complete aliases, not arbitrary substrings. This keeps short
+            # ontology aliases such as "TA" from matching words like "total".
+            if re.search(rf"(?<!\w){re.escape(alias)}(?!\w)", q) and entry["ontology_uri"] not in seen:
                 matched.append(entry)
                 seen.add(entry["ontology_uri"])
         return matched
@@ -129,12 +131,17 @@ class SqlGenerator:
         select_concepts: list[dict],
         filter_concepts: Optional[list[dict]] = None,
         filter_values: Optional[dict] = None,
-        aggregate: bool = False,
+        aggregate: bool | str = False,
         limit: Optional[int] = None,
     ) -> str:
         filter_concepts = filter_concepts or []
         filter_values = filter_values or {}
         limit = limit or self.DEFAULT_LIMIT
+        aggregate_func = (
+            "SUM" if aggregate is True
+            else aggregate.upper() if isinstance(aggregate, str) and aggregate
+            else None
+        )
 
         all_concepts = select_concepts + filter_concepts
         tables_needed: dict[str, str] = {}
@@ -154,10 +161,13 @@ class SqlGenerator:
             if col:
                 a = aliases[c["uc_table"]]
                 label = re.sub(r"[^A-Za-z0-9_]", "_", c["ontology_label"])
-                if aggregate and c.get("is_aggregatable"):
-                    select_parts.append(f"SUM({a}.{col}) AS total_{label}")
+                if aggregate_func in {"SUM", "AVG"} and c.get("is_aggregatable"):
+                    prefix = "total" if aggregate_func == "SUM" else "average"
+                    select_parts.append(f"{aggregate_func}({a}.{col}) AS {prefix}_{label}")
                 else:
                     select_parts.append(f"{a}.{col} AS {label}")
+        if aggregate_func == "COUNT":
+            select_parts.insert(0, "COUNT(*) AS record_count")
         if not select_parts:
             select_parts = [f"{base_alias}.*"]
 
@@ -189,9 +199,11 @@ class SqlGenerator:
 
         # GROUP BY
         group_by = []
-        if aggregate:
+        if aggregate_func:
             for c in select_concepts:
-                if c.get("uc_column") and not c.get("is_aggregatable"):
+                if c.get("uc_column") and not (
+                    aggregate_func in {"SUM", "AVG"} and c.get("is_aggregatable")
+                ):
                     group_by.append(f"{aliases[c['uc_table']]}.{c['uc_column']}")
 
         newline = ",\n  "
@@ -217,7 +229,9 @@ class OMDAEngine:
     registry). Call .answer(question) to get {sql, concepts, results, ...}.
     """
 
-    FILTER_PREPS = r"(?:with|for|by|from|where|named|called|in|in the)"
+    # "by" is intentionally excluded: in analytical questions it introduces
+    # grouping ("total fees by supplier"), not a value filter.
+    FILTER_PREPS = r"(?:with|for|from|where|named|called|in|in the)"
 
     def __init__(self, source: GraphSource, adapter: BackendAdapter, llm_fn=None) -> None:
         self.source = source
@@ -271,6 +285,18 @@ class OMDAEngine:
                 select_c.append(concept)
         return select_c, filter_c, filter_v
 
+    @staticmethod
+    def _detect_aggregate_intent(question: str) -> str | bool:
+        """Return the SQL aggregate requested explicitly by the question."""
+        q = question.lower()
+        if re.search(r"\b(average|avg|mean)\b", q):
+            return "AVG"
+        if re.search(r"\b(count|how many|number of)\b", q):
+            return "COUNT"
+        if re.search(r"\b(total|sum|summed)\b", q):
+            return "SUM"
+        return False
+
     def answer(self, question: str, limit: int = 100, dry_run: bool = False) -> dict[str, Any]:
         concepts = self.extractor.extract(question)
         if not concepts:
@@ -292,10 +318,12 @@ class OMDAEngine:
             ]
             select_c = base_props[:5]
 
+        aggregate = self._detect_aggregate_intent(question)
         sql = self.generator.generate(
             select_concepts=select_c,
             filter_concepts=filter_c,
             filter_values=filter_v,
+            aggregate=aggregate,
             limit=limit,
         )
 

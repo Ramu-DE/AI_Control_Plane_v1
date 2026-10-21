@@ -27,6 +27,7 @@ SaaS features for a regulated-pharma (Takeda) context.
 | **Policy Stores** (Part 3-2) | `/policy-stores` | Amazon Verified Permissions: namespace, schema, in-tool Cedar policies |
 | **Playground** (Part 4) | `/playground` | End-to-end persona simulation: JWT identity → Gateway (Cedar) → AVP → result, with a **real Bedrock agent response** on allow |
 | **Model Governance** (Part 5) | `/settings` → Governance tab | LLM gateway inference targets + gateway-routed models + **rate limits** (per-target / per-caller / hybrid, real 429 enforcement) |
+| **Graph Sources** | `/graph` | Governed Neptune + Unity Catalog OMDA sources: Draft→Approved lifecycle, Cedar routing preview, and live Databricks Model Serving forwarding |
 | **Workflows** (extension) | `/workflows` | **Real multi-agent workflow execution on Bedrock** with human-in-the-loop review gates (approve / revise / deny / re-run) |
 | **Tenants** (extension) | `/tenants` | Hierarchical Takeda org tree (BUs → functions → sub-units) with basic/pro tiers + pool/silo isolation + enforced tier limits |
 | **Approval Inbox** (extension) | `/approvals` | Aggregated pending registry records + in-review policies |
@@ -174,7 +175,6 @@ tenant isolation enforcement, GxP/GDPR/PHI controls, observability, CDK/Terrafor
   `anycompany_agent_policy` (namespace `AnyCompany`, approve_director + approve_manager).
 - **Part 5:** inference targets `bedrock-mantle` (Connector) + `fast-tier` (Custom).
 - **Tenants:** full Takeda org tree (32 nodes) — BUs + global functions, pro→silo / basic→pool.
-- **Workflow:** `Expense Triage` (Researcher → Drafter [gate] → Reviewer).
 
 Create **Jane Doe** (seniority_ic) yourself via Settings → Personas to reproduce the Part 4/5
 IC scenarios.

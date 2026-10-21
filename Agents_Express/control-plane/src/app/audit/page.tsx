@@ -12,6 +12,7 @@ const CATEGORIES: (AuditCategory | "all")[] = [
   "policy",
   "playground",
   "model",
+  "graph",
 ];
 
 export default function AuditPage() {

@@ -28,6 +28,7 @@ import {
   Workflow,
   WorkflowRun,
 } from "./types";
+import { normalizeAgentCompute } from "./runtimes";
 
 export interface Store {
   tenants: Tenant[];
@@ -364,13 +365,30 @@ function seed(): Store {
         // stayed in Draft so it cannot be wired into the agent.
         toolRefs: ["rec-expense-tool"],
         knowledgeRefs: ["rec-kb-bedrock-policies"],
-        compute: { runtime: "Bedrock AgentCore" },
+        compute: {
+          agentRuntimeId: "aws-agentcore-runtime",
+          modelRuntimeId: "aws-bedrock",
+        },
         visibility: "public",
         status: "ready",
         createdAt: iso(3),
       },
     ],
     policies: [
+      {
+        id: "pol-gw-query-graph",
+        name: "Gateway: authenticated personas may query graph sources",
+        layer: "gateway",
+        description:
+          "Demo perimeter policy for the OMDA router. Production scopes this by tenant, BU, and graph source.",
+        enabled: true,
+        createdAt: iso(0),
+        cedar: `permit(
+  principal,
+  action == Action::"queryGraphSource",
+  resource == Tool::"omda"
+);`,
+      },
       {
         id: "pol-gw-allow-ic-list",
         name: "Gateway: ICs may list/submit own expenses",
@@ -806,49 +824,7 @@ when {
         enabled: true,
       },
     ],
-    workflows: [
-      {
-        id: "wf-expense-triage",
-        name: "Expense Triage",
-        description:
-          "Research the expense context, draft a recommendation, then a reviewer approves before finalizing.",
-        tenantId: "fn-finance",
-        steps: [
-          {
-            id: "step-researcher",
-            name: "Researcher",
-            modelId: "model-claude-opus-46",
-            prompt:
-              "Analyze the expense request. Identify the category, whether it looks policy-compliant, and any red flags. Be concise (3-4 bullet points).",
-            toolRefs: ["rec-expense-tool"],
-            knowledgeRefs: ["rec-kb-bedrock-policies"],
-            reviewGate: false,
-          },
-          {
-            id: "step-drafter",
-            name: "Drafter",
-            modelId: "model-claude-opus-46",
-            prompt:
-              "Based on the research, draft a short recommendation (approve / reject / escalate) with a one-sentence justification.",
-            toolRefs: [],
-            knowledgeRefs: [],
-            reviewGate: true,
-          },
-          {
-            id: "step-reviewer",
-            name: "Reviewer",
-            modelId: "model-claude-opus-46",
-            prompt:
-              "Produce the final decision message to send to the employee, incorporating the approved recommendation. Professional tone, 2-3 sentences.",
-            toolRefs: ["rec-expense-tool"],
-            knowledgeRefs: [],
-            reviewGate: false,
-          },
-        ],
-        createdAt: iso(2),
-        updatedAt: iso(1),
-      },
-    ],
+    workflows: [],
     workflowRuns: [],
     audit: [
       {
@@ -892,6 +868,12 @@ const globalForStore = globalThis as unknown as { __cpStore?: Store };
 
 export const store: Store = globalForStore.__cpStore ?? seed();
 if (!globalForStore.__cpStore) globalForStore.__cpStore = store;
+
+// Normalize agents retained across next dev hot-reloads from the legacy
+// { runtime: "Bedrock AgentCore" } compute shape into the two-plane model.
+for (const agent of store.agents) {
+  agent.compute = normalizeAgentCompute(agent.compute);
+}
 
 export function newId(prefix: string): string {
   return `${prefix}-${Math.random().toString(36).slice(2, 10)}`;

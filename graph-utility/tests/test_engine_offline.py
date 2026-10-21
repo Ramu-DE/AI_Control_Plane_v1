@@ -84,15 +84,29 @@ def main() -> int:
     print("\nQ2 SQL:\n", r2["sql"])
     assert "supplier_name" in r2["sql"] and "therapeutic_area" in r2["sql"]
 
-    # 3) execution path (mock)
-    r3 = engine.answer("supplier name for oncology", limit=5)
-    print("\nQ3 rows:", r3.get("rows"), "count:", r3.get("row_count"))
-    assert r3.get("row_count") == 1
+    # 3) analytical intent: "by" is GROUP BY, not a value filter
+    r3 = engine.answer("total fees amount by supplier name", dry_run=True)
+    print("\nQ3 aggregate SQL:\n", r3["sql"])
+    assert r3["filters"] == {}, f"grouping phrase became a filter: {r3['filters']}"
+    assert "Therapeutic Area" not in r3["concepts"], "short alias TA matched inside another word"
+    assert "SUM(" in r3["sql"] and "GROUP BY" in r3["sql"], "SUM/GROUP BY missing"
+    assert "ILIKE '%name%'" not in r3["sql"], "spurious supplier-name filter present"
 
-    # 4) no-concept question handled gracefully
-    r4 = engine.answer("what is the weather today", dry_run=True)
-    assert r4.get("error"), "expected graceful error for no-concept question"
-    print("\nQ4 handled:", r4["error"])
+    r4 = engine.answer("average fees amount by supplier name", dry_run=True)
+    assert "AVG(" in r4["sql"] and "GROUP BY" in r4["sql"], "AVG/GROUP BY missing"
+
+    r5 = engine.answer("count contracts by supplier name", dry_run=True)
+    assert "COUNT(*)" in r5["sql"] and "GROUP BY" in r5["sql"], "COUNT/GROUP BY missing"
+
+    # 4) execution path (mock)
+    r6 = engine.answer("supplier name for oncology", limit=5)
+    print("\nQ6 rows:", r6.get("rows"), "count:", r6.get("row_count"))
+    assert r6.get("row_count") == 1
+
+    # 5) no-concept question handled gracefully
+    r7 = engine.answer("what is the weather today", dry_run=True)
+    assert r7.get("error"), "expected graceful error for no-concept question"
+    print("\nQ7 handled:", r7["error"])
 
     print("\nALL OFFLINE ENGINE TESTS PASSED")
     return failures

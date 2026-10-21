@@ -7,6 +7,8 @@
 //  - Part 5 Model Governance (providers, LLM gateway routes)
 //  - plus an Audit trail.
 
+import type { AgentCompute } from "./runtimes";
+
 export type ID = string;
 
 // ---------- SaaS multi-tenancy (replicated from saas-gaming-app/saas-workloads) ----------
@@ -187,10 +189,9 @@ export interface AgentConfig {
   toolRefs: ID[];
   // Approved Knowledge Base record ids this agent may retrieve from (RAG).
   knowledgeRefs: ID[];
-  // Compute is informational: the agent runs on Bedrock AgentCore Runtime.
-  compute: {
-    runtime: string; // e.g. "Bedrock AgentCore"
-  };
+  // Execution and model compute are separate planes; each id is validated
+  // against the provider/family catalog in lib/runtimes.ts.
+  compute: AgentCompute;
   visibility: AgentVisibility;
   status: "draft" | "ready";
   createdAt: string;
@@ -380,13 +381,53 @@ export interface ModelRoute {
   enabled: boolean;
 }
 
+// ---------- Graph Sources (generic ontology-mediated data access) ----------
+// Camel-case mirror of graph-utility's GraphSource descriptor. Secrets are
+// referenced at runtime and are never stored in this record.
+export interface GraphSourceConfig {
+  graphSourceId: string;
+  bu: string;
+  displayName: string;
+  description: string;
+  ontology: {
+    type: "neptune";
+    sparqlUrl: string;
+    graphUri: string;
+    namespace: string;
+    auth?: "sigv4-assume-role";
+    roleArn?: string;
+    region?: string;
+  };
+  backend: {
+    type: "databricks-uc";
+    catalog: string;
+    schema: string;
+    registryTable: string;
+    universalJoinKey: string;
+    vectorIndex?: string;
+    vectorEndpoint?: string;
+  };
+  llmEndpoint: string;
+  queryEngineUrl: string;
+  tags: Record<string, string>;
+  version: string;
+}
+
+export interface GraphSourceRecord extends GraphSourceConfig {
+  status: RecordStatus;
+  owner: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 // ---------- Audit ----------
 export type AuditCategory =
   | "registry"
   | "agent"
   | "policy"
   | "playground"
-  | "model";
+  | "model"
+  | "graph";
 
 export interface AuditEvent {
   id: ID;

@@ -67,3 +67,142 @@ body {
 .nav-item-active {
   @apply bg-brand-50 font-medium text-brand-700;
 }
+
+/* Compact control-plane density ------------------------------------------------
+   Desktop consoles benefit from a denser information hierarchy. Keep mobile
+   text slightly larger for touch/readability while reducing repeated Tailwind
+   spacing and heading utilities consistently across every page. */
+html {
+  font-size: 14px;
+}
+
+body {
+  line-height: 1.4;
+}
+
+.card {
+  border-radius: 0.625rem;
+  box-shadow: 0 1px 2px rgb(15 23 42 / 0.025);
+}
+
+.btn {
+  gap: 0.4rem;
+  border-radius: 0.45rem;
+  padding: 0.42rem 0.75rem;
+  font-size: 0.8125rem;
+  line-height: 1.2rem;
+}
+
+.input {
+  border-radius: 0.45rem;
+  padding: 0.45rem 0.7rem;
+  font-size: 0.8125rem;
+  line-height: 1.25rem;
+}
+
+.label {
+  margin-bottom: 0.3rem;
+  font-size: 0.75rem;
+}
+
+.hint {
+  margin-top: 0.25rem;
+  font-size: 0.7rem;
+}
+
+.badge {
+  padding: 0.15rem 0.5rem;
+  font-size: 0.7rem;
+  line-height: 1rem;
+}
+
+.radio-card {
+  gap: 0.65rem;
+  border-radius: 0.625rem;
+  padding: 0.75rem;
+}
+
+.mono {
+  font-size: 0.75rem;
+}
+
+.nav-section {
+  padding: 0.7rem 0.65rem 0.2rem;
+  font-size: 0.625rem;
+}
+
+.nav-item {
+  gap: 0.6rem;
+  border-radius: 0.45rem;
+  padding: 0.42rem 0.65rem;
+  font-size: 0.8125rem;
+}
+
+/* Normalize page-level spacing and large headings from all feature pages. */
+main .card.p-6 {
+  padding: 1rem;
+}
+main .card.p-5 {
+  padding: 0.875rem;
+}
+main .card.p-4 {
+  padding: 0.75rem;
+}
+main .px-8 {
+  padding-left: 1.25rem;
+  padding-right: 1.25rem;
+}
+main .p-8 {
+  padding: 1.25rem;
+}
+main .py-6 {
+  padding-top: 1rem;
+  padding-bottom: 1rem;
+}
+main .gap-6 {
+  gap: 1rem;
+}
+main .space-y-6 > :not([hidden]) ~ :not([hidden]) {
+  margin-top: 1rem;
+}
+main .text-3xl {
+  font-size: 1.5rem;
+  line-height: 1.85rem;
+}
+main .text-2xl {
+  font-size: 1.25rem;
+  line-height: 1.6rem;
+}
+main .text-xl {
+  font-size: 1.1rem;
+  line-height: 1.45rem;
+}
+main .text-lg {
+  font-size: 1rem;
+  line-height: 1.35rem;
+}
+
+/* Dense data tables remain readable and fit more records above the fold. */
+main table th {
+  padding: 0.55rem 0.75rem;
+}
+main table td {
+  padding: 0.6rem 0.75rem;
+}
+
+@media (max-width: 640px) {
+  html {
+    font-size: 15px;
+  }
+
+  main .px-8,
+  main .p-8 {
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+
+  main .card.p-6,
+  main .card.p-5 {
+    padding: 0.875rem;
+  }
+}

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { PageHeader, Pill, EmptyState } from "@/components/ui";
+import { AwsModeBadge } from "@/components/AwsModeBadge";
 import { getJSON, sendJSON } from "@/lib/api";
 import {
   CognitoGroup,
@@ -80,9 +81,12 @@ export default function PolicyLibraryPage() {
         title="Policy Library"
         subtitle="Author, version, and publish Cedar authorization policies."
         action={
-          <button className="btn-primary" onClick={() => setView({ kind: "create" })}>
-            + Create Policy
-          </button>
+          <div className="flex items-center gap-2">
+            <AwsModeBadge />
+            <button className="btn-primary" onClick={() => setView({ kind: "create" })}>
+              + Create Policy
+            </button>
+          </div>
         }
       />
       <div className="px-4 pb-10 sm:px-6 lg:px-8">

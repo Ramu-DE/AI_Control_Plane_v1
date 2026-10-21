@@ -8,9 +8,10 @@ Contract IQ (Market Access) is the **first tenant**. Add another BU tomorrow by
 adding one **GraphSource descriptor** + building its registry + pointing a
 serving endpoint — **no engine code changes**.
 
-> Built under `AgentControl/graph-utility/`. It does **not** modify the running
-> control-plane app. Endpoints (Databricks/Neptune) are config — drop them into
-> the descriptor when ready.
+> The query/build utility lives in `graph-utility/`; its Graph Source control-plane
+> provider is implemented in `Agents_Express/control-plane/` (`/graph` and
+> `/api/graph`). Placeholder descriptors work in routing-preview mode until live
+> Databricks/Neptune endpoints are configured.
 
 ---
 

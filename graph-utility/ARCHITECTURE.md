@@ -98,7 +98,7 @@ per-BU artifacts. Two pluggable axes:
 | **1a** | GraphSource descriptor + registry/loader/validator | ✅ `descriptor.py` (+ offline-validated) |
 | **1b** | Generic engine + backend-adapter seam (UC) | ✅ `engine.py`, `backends.py` (+ offline test PASS) |
 | **1c** | MLflow pyfunc serving wrapper (routes by id) | ✅ `serving.py` (+ routing test PASS) |
-| **2**  | AgentControl "Graph Source" provider (design) | ✅ `docs/PHASE2_agentcontrol_provider.md` |
+| **2**  | AgentControl Graph Source provider: lifecycle, Cedar preview, live router, `/graph` UI | ✅ `Agents_Express/control-plane/src/app/{graph,api/graph}` |
 | **3**  | Registry auto-build (Neptune → MERGE), Temporal-ready | ✅ `ontology.py`, `registry_build.py`, `jobs/…` (+ offline test PASS) |
 | **4**  | Identity propagation + audit join; adopt Temporal when onboarding is multi-system | ⏳ planned |
 

@@ -29,8 +29,28 @@ AgentCore APIs later.
 | Agents | Part 2 | `/agents` | Declarative agent builder (model, prompt, tools, compute) |
 | Policies | Part 3 | `/policies` | Cedar editor in **two layers**: AgentCore Policy (gateway) + Verified Permissions (in-tool) |
 | Playground | Part 4 | `/playground` | Simulate a **persona** invoking a tool; see both layers decide |
-| Model Governance | Part 5 | `/models` | LLM gateway **routes**, **providers**, rate limits & token budgets |
+| Graph Sources | Extension | `/graph` | Register/govern OMDA datasets; preview Cedar routing; forward configured queries to Databricks Model Serving |
+| Model Governance | Part 5 | `/settings` | LLM gateway **routes**, **providers**, rate limits & token budgets |
 | Audit | — | `/audit` | Filterable trail of every control-plane action |
+
+## Runtime catalog
+
+Agent configurations select two independent runtime planes. The **agentic
+workload** plane runs the agent process and orchestration; the **model inference
+and fine-tuning** plane serves or customizes models. `GET /api/runtimes` exposes
+the same provider/family catalog used by the Create Agent UI and the Agents API
+validates both runtime IDs.
+
+- **AWS agent workloads:** Bedrock AgentCore Runtime, Lambda, ECS, and EKS.
+- **AWS model compute:** Bedrock, SageMaker AI, and EKS.
+- **Databricks agent workloads:** Agent Runtime on Databricks Apps, custom Apps
+  hosting, and Lakeflow Jobs for scheduled/batch agents.
+- **Databricks model compute:** grouped managed Model Serving, serverless GPU AI
+  Runtime (Standard and AI environments), classic Databricks Runtime ML, and
+  data/feature-engineering runtimes (Standard, Photon, and LTS).
+
+Runtime entries deliberately track durable families rather than release numbers
+or accelerator SKUs, which can evolve independently of saved agent definitions.
 
 ## Run it
 
@@ -49,6 +69,54 @@ npm run build     # production build
 npm run start     # run the production build
 npm run typecheck # tsc --noEmit
 ```
+
+## Real-AWS execution slice (read-only)
+
+By default the app runs **entirely locally** against the in-memory store. An
+optional, **read-only** AWS slice can be enabled to inspect real resources in
+your account — it never creates, updates, or deletes anything.
+
+### Enable it
+
+```bash
+export AWS_EXECUTION_MODE=aws       # default is "local"
+export AWS_REGION=us-east-1         # or AWS_DEFAULT_REGION; no hardcoded fallback
+# credentials: provided by the default AWS SDK credential chain only
+#   (env / SSO / shared config / instance|ECS|Pod role) — never set in code.
+npm run dev
+```
+
+Then open **AWS Resources** in the sidebar (`/aws-resources`). Registry, Agents,
+and Policies pages also show an **AWS / Local** badge that links there.
+
+### What it does
+
+| Endpoint | AWS API (read-only) | Purpose |
+|---|---|---|
+| `GET /api/aws/status` | STS `GetCallerIdentity` + light probes | Mode, region, account, per-service probes |
+| `GET /api/aws/knowledge-bases` | Bedrock Agent `ListKnowledgeBases` | Live KB discovery |
+| `GET /api/aws/agents` | Bedrock Agent `ListAgents` | Live agent discovery |
+| `GET /api/aws/policy-stores` | Verified Permissions `ListPolicyStores` | Live policy-store discovery |
+| `POST /api/aws/retrieve` | Bedrock Agent Runtime `Retrieve` | KB semantic retrieval (no generation) |
+| `POST /api/aws/authorize` | Verified Permissions `IsAuthorized` | Authorization check adapter (minimal, validated ids) |
+
+### Guarantees
+
+- **No credentials** in code, logs, or files — the SDK default credential chain
+  is the only source. No access-key env var is read or written by the app.
+- **Mode** is `AWS_EXECUTION_MODE=local|aws`, defaulting to `local`. In local
+  mode the AWS endpoints return a `412` with a clear message and run no AWS calls.
+- **Region** comes only from `AWS_REGION` / `AWS_DEFAULT_REGION`; a missing
+  region in `aws` mode yields a clear `REGION_UNSET` configuration error.
+- **Read-only**: only `List*` / `Get*` / `Retrieve` / `IsAuthorized` are called.
+  No create/update/delete API is used anywhere in this slice.
+- **Honest responses**: empty accounts return empty lists; access-denied is
+  reported distinctly (`403`, amber in the UI) rather than masked as an error.
+- New `@aws-sdk/*` packages are pinned to the exact version of the installed
+  `@aws-sdk/client-bedrock-runtime` (`3.1152.0`).
+
+See `.env.example` for all variables. Base-path (`/agent-control`) compatibility
+is preserved — set `BASE_PATH` and `NEXT_PUBLIC_BASE_PATH` together.
 
 ## The two-layer authorization model (Part 3 + 4)
 
@@ -109,4 +177,6 @@ The API route contracts (`/api/*`) stay the same, so the UI does not change.
 - This is a local demonstration. The Cedar evaluator in `evaluator.ts` is a small,
   explainable simulation — **not** a full Cedar engine. Use the real Cedar / AVP
   engines when wiring to AWS.
-- No AWS credentials are used or stored by this app.
+- No AWS credentials are ever stored by this app. In `local` mode no AWS calls
+  are made at all; in `aws` mode the read-only slice uses the AWS SDK default
+  credential provider chain (see "Real-AWS execution slice" above).
