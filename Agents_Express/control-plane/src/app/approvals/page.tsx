@@ -102,13 +102,13 @@ export default function ApprovalsPage() {
         title="Approval Inbox"
         subtitle="Everything awaiting review in one place — registry records and policies. Approve, reject, or submit for review."
       />
-      <div className="px-8 pb-10">
+      <div className="px-4 pb-10 sm:px-6 lg:px-8">
         {error && (
           <div className="mb-4 rounded-lg bg-red-50 px-4 py-2 text-sm text-red-700">
             {error}
           </div>
         )}
-        <div className="mb-5 grid grid-cols-3 gap-4">
+        <div className="mb-5 grid grid-cols-1 gap-4 sm:grid-cols-3">
           {[
             ["Pending total", items.length],
             ["Registry records", registry.length],
@@ -124,8 +124,8 @@ export default function ApprovalsPage() {
         {items.length === 0 ? (
           <EmptyState text="Nothing awaiting approval. 🎉" />
         ) : (
-          <div className="card overflow-hidden">
-            <table className="w-full text-sm">
+          <div className="card overflow-x-auto">
+            <table className="w-full min-w-[44rem] text-sm">
               <thead>
                 <tr className="bg-slate-50 text-left text-xs font-semibold text-slate-500">
                   <th className="px-4 py-3">Name</th>
@@ -154,6 +154,7 @@ export default function ApprovalsPage() {
                     <td className="px-4 py-3">
                       <div className="flex justify-end gap-2">
                         <button
+                          type="button"
                           className="btn-primary"
                           disabled={busy === it.id}
                           onClick={() => act(it, "approve")}
@@ -162,6 +163,7 @@ export default function ApprovalsPage() {
                         </button>
                         {it.kind === "registry-record" && (
                           <button
+                            type="button"
                             className="btn-ghost"
                             disabled={busy === it.id}
                             onClick={() => act(it, "reject")}

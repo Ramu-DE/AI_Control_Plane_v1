@@ -356,20 +356,12 @@ function AgentDetail({
   return (
     <>
       <DetailHeader
-        backHref="#"
+        onBack={onBack}
         title={agent.name}
         subtitle="Configure agent settings and behavior"
         avatar
       />
-      <div className="px-8 pt-3">
-        <button
-          onClick={onBack}
-          className="text-sm text-slate-500 hover:text-slate-900"
-        >
-          ← Back to agents
-        </button>
-      </div>
-      <div className="flex gap-6 px-8 py-4 pb-10">
+      <div className="flex flex-col gap-6 px-4 py-4 pb-10 sm:px-6 lg:flex-row lg:px-8">
         {/* Sub-nav */}
         <div className="card h-fit w-48 shrink-0 p-2">
           {navItems.map((it) => (
@@ -452,8 +444,8 @@ function AgentDetail({
                 Manage the tools available to this agent. Tools allow the agent
                 to perform actions beyond conversation.
               </p>
-              <div className="mt-4 overflow-hidden rounded-lg border border-slate-200">
-                <table className="w-full text-sm">
+              <div className="mt-4 overflow-x-auto rounded-lg border border-slate-200">
+                <table className="w-full min-w-[32rem] text-sm">
                   <thead>
                     <tr className="bg-slate-50 text-left text-xs font-semibold text-slate-500">
                       <th className="px-4 py-3">Name</th>

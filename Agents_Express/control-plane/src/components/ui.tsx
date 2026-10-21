@@ -13,7 +13,7 @@ export function PageHeader({
   action?: ReactNode;
 }) {
   return (
-    <div className="flex items-start justify-between gap-4 px-8 py-5">
+    <div className="flex flex-col gap-3 px-4 py-5 sm:flex-row sm:items-start sm:justify-between sm:gap-4 sm:px-6 lg:px-8">
       <div>
         <h1 className="text-xl font-semibold">{title}</h1>
         {subtitle && <p className="mt-0.5 text-sm text-slate-500">{subtitle}</p>}
@@ -23,30 +23,61 @@ export function PageHeader({
   );
 }
 
-// Detail-page header with a back arrow + avatar, like the agent/record pages.
+// Detail-page header with a back control + avatar, like the agent/record pages.
+// Provide `onBack` for in-page (client) navigation rendered as a real <button>,
+// or `backHref` for link-based navigation. If both are given, `onBack` wins.
 export function DetailHeader({
   backHref,
+  onBack,
   title,
   subtitle,
   avatar,
   actions,
 }: {
-  backHref: string;
+  backHref?: string;
+  onBack?: () => void;
   title: string;
   subtitle?: string;
   avatar?: boolean;
   actions?: ReactNode;
 }) {
+  const backIcon = (
+    <svg
+      viewBox="0 0 24 24"
+      className="h-5 w-5"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M19 12H5M12 19l-7-7 7-7" />
+    </svg>
+  );
+
+  const back = onBack ? (
+    <button
+      type="button"
+      onClick={onBack}
+      className="text-slate-500 hover:text-slate-900"
+      aria-label="Back"
+    >
+      {backIcon}
+    </button>
+  ) : backHref ? (
+    <Link
+      href={backHref}
+      className="text-slate-500 hover:text-slate-900"
+      aria-label="Back"
+    >
+      {backIcon}
+    </Link>
+  ) : null;
+
   return (
-    <div className="flex items-center justify-between gap-4 border-b border-slate-200 px-8 py-4">
+    <div className="flex flex-col gap-3 border-b border-slate-200 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-6 lg:px-8">
       <div className="flex items-center gap-3">
-        <Link
-          href={backHref}
-          className="text-slate-500 hover:text-slate-900"
-          aria-label="Back"
-        >
-          <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
-        </Link>
+        {back}
         {avatar && (
           <div className="h-9 w-9 rounded-md bg-gradient-to-br from-indigo-400 via-purple-400 to-orange-300" />
         )}
@@ -55,7 +86,7 @@ export function DetailHeader({
           {subtitle && <p className="text-sm text-slate-500">{subtitle}</p>}
         </div>
       </div>
-      {actions && <div className="flex items-center gap-2">{actions}</div>}
+      {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
     </div>
   );
 }
@@ -177,8 +208,8 @@ export function Modal({
   footer?: ReactNode;
 }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
-      <div className="w-full max-w-lg rounded-2xl bg-white shadow-xl">
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-900/40 p-4 sm:items-center">
+      <div className="my-auto max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl bg-white shadow-xl">
         <div className="flex items-start justify-between px-6 pt-6">
           <div>
             <h2 className="text-lg font-semibold">{title}</h2>
@@ -187,6 +218,7 @@ export function Modal({
             )}
           </div>
           <button
+            type="button"
             onClick={onClose}
             className="text-slate-400 hover:text-slate-700"
             aria-label="Close"

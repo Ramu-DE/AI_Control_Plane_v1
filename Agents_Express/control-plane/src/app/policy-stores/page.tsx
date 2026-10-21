@@ -24,12 +24,12 @@ export default function PolicyStoresPage() {
         title="Policy Stores"
         subtitle="Manage Amazon Verified Permissions policy stores for tool-level authorization."
       />
-      <div className="px-8 pb-10">
+      <div className="px-4 pb-10 sm:px-6 lg:px-8">
         {stores.length === 0 ? (
           <EmptyState text="No policy stores." />
         ) : (
-          <div className="card overflow-hidden">
-            <table className="w-full text-sm">
+          <div className="card overflow-x-auto">
+            <table className="w-full min-w-[44rem] text-sm">
               <thead>
                 <tr className="bg-slate-50 text-left text-xs font-semibold text-slate-500">
                   <th className="px-4 py-3">Name</th>
@@ -79,33 +79,52 @@ function StoreDetail({
 
   return (
     <>
-      <div className="flex items-center gap-3 border-b border-slate-200 px-8 py-4">
-        <button onClick={onBack} className="text-slate-500 hover:text-slate-900">
-          ←
+      <div className="flex items-center gap-3 border-b border-slate-200 px-4 py-4 sm:px-6 lg:px-8">
+        <button
+          type="button"
+          onClick={onBack}
+          className="text-slate-500 hover:text-slate-900"
+          aria-label="Back"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            className="h-5 w-5"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M19 12H5M12 19l-7-7 7-7" />
+          </svg>
         </button>
         <h1 className="text-lg font-semibold">{store.name}</h1>
         <span className="badge bg-green-50 text-green-700">{store.status}</span>
       </div>
-      <div className="flex gap-6 px-8 py-4 pb-10">
-        <div className="card h-fit w-48 shrink-0 p-2">
-          {([
-            ["overview", "📖 Overview"],
-            ["schema", "🧩 Schema"],
-            ["policies", "📄 Policies"],
-            ["sync", "🕘 Sync history"],
-          ] as const).map(([k, label]) => (
-            <button
-              key={k}
-              onClick={() => setTab(k)}
-              className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm ${
-                tab === k
-                  ? "bg-slate-100 font-medium text-slate-900"
-                  : "text-slate-600 hover:bg-slate-50"
-              }`}
-            >
-              {label}
-            </button>
-          ))}
+      <div className="flex flex-col gap-6 px-4 py-4 pb-10 sm:px-6 lg:flex-row lg:px-8">
+        <div className="card h-fit p-2 lg:w-48 lg:shrink-0">
+          <div className="flex gap-1 overflow-x-auto lg:flex-col lg:overflow-visible">
+            {([
+              ["overview", "📖 Overview"],
+              ["schema", "🧩 Schema"],
+              ["policies", "📄 Policies"],
+              ["sync", "🕘 Sync history"],
+            ] as const).map(([k, label]) => (
+              <button
+                key={k}
+                type="button"
+                onClick={() => setTab(k)}
+                aria-current={tab === k ? "page" : undefined}
+                className={`flex w-full shrink-0 items-center gap-2 whitespace-nowrap rounded-lg px-3 py-2 text-sm ${
+                  tab === k
+                    ? "bg-slate-100 font-medium text-slate-900"
+                    : "text-slate-600 hover:bg-slate-50"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
 
         <div className="min-w-0 flex-1">
@@ -147,8 +166,8 @@ function StoreDetail({
 
           {tab === "policies" && (
             <div className="space-y-4">
-              <div className="card overflow-hidden">
-                <table className="w-full text-sm">
+              <div className="card overflow-x-auto">
+                <table className="w-full min-w-[32rem] text-sm">
                   <thead>
                     <tr className="bg-slate-50 text-left text-xs font-semibold text-slate-500">
                       <th className="px-4 py-3">Name</th>
@@ -190,8 +209,8 @@ function StoreDetail({
           {tab === "sync" && (
             <div className="card p-6">
               <h2 className="text-base font-semibold">Sync history</h2>
-              <div className="mt-4 overflow-hidden rounded-lg border border-slate-200">
-                <table className="w-full text-sm">
+              <div className="mt-4 overflow-x-auto rounded-lg border border-slate-200">
+                <table className="w-full min-w-[40rem] text-sm">
                   <thead>
                     <tr className="bg-slate-50 text-left text-xs font-semibold text-slate-500">
                       <th className="px-4 py-3">Scope</th>

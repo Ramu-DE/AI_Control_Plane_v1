@@ -27,9 +27,16 @@ function Stat({
 }
 
 export default function DashboardPage() {
-  const activePolicies = store.policies.filter((p) => p.enabled).length;
-  const gatewayPolicies = store.policies.filter((p) => p.layer === "gateway").length;
-  const avpPolicies = store.policies.filter((p) => p.layer === "avp").length;
+  // The "Policies" stat links to the Policy Library (/policies), which lists
+  // store.libraryPolicies — so count/label/hint must reflect THAT collection,
+  // not the runtime gateway/AVP policy array (store.policies).
+  const libraryPolicies = store.libraryPolicies.length;
+  const publishedPolicies = store.libraryPolicies.filter(
+    (p) => p.status === "Published"
+  ).length;
+  const draftPolicies = store.libraryPolicies.filter(
+    (p) => p.status === "Draft" || p.status === "In Review"
+  ).length;
 
   // Governance signals (surfaced for the Platform Admin persona).
   const pendingApprovals =
@@ -64,9 +71,9 @@ export default function DashboardPage() {
         title="Control Plane Overview"
         subtitle="Build and govern AI agents as digital employees — registry, agents, policies, model governance, and audit in one place."
       />
-      <div className="p-8">
+      <div className="px-4 py-6 sm:px-6 lg:px-8">
         {/* Governance signals */}
-        <div className="mb-6 grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {signals.map((s) => (
             <Link
               key={s.label}
@@ -87,7 +94,7 @@ export default function DashboardPage() {
           ))}
         </div>
 
-        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <Stat
             label="Registry Records"
             value={store.records.length}
@@ -101,10 +108,10 @@ export default function DashboardPage() {
             hint="Declarative agents (Part 2)"
           />
           <Stat
-            label="Active Policies"
-            value={activePolicies}
+            label="Policy Library"
+            value={libraryPolicies}
             href="/policies"
-            hint={`${gatewayPolicies} gateway · ${avpPolicies} AVP (Part 3)`}
+            hint={`${publishedPolicies} published · ${draftPolicies} draft/in review (Part 3)`}
           />
           <Stat
             label="Catalog Models"

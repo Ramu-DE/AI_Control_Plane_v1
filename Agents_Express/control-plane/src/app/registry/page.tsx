@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import {
   PageHeader,
   DetailHeader,
@@ -195,8 +196,8 @@ export default function RegistryPage() {
             {records.length === 0 ? (
               <EmptyState text="No records in this registry yet." />
             ) : (
-              <div className="card overflow-hidden">
-                <table className="w-full text-sm">
+              <div className="card overflow-x-auto">
+                <table className="w-full min-w-[40rem] text-sm">
                   <thead>
                     <tr className="bg-slate-50 text-left text-xs font-semibold text-slate-500">
                       <th className="px-4 py-3">Name</th>
@@ -646,7 +647,7 @@ function CreateRecord({
       </div>
 
       {/* Sticky footer actions */}
-      <div className="fixed bottom-0 left-64 right-0 flex items-center justify-between gap-2 border-t border-slate-200 bg-white px-8 py-4">
+      <div className="fixed bottom-0 left-0 right-0 flex flex-col gap-2 border-t border-slate-200 bg-white px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6 lg:left-64 lg:px-8">
         <div className="text-xs text-slate-500">
           {type} · {recordSource === "synchronize-from-endpoint" ? "Sync from endpoint" : "Define manually"} ·{" "}
           Auth: <span className="font-medium text-slate-700">{credentialType}</span>
@@ -714,52 +715,38 @@ function RecordDetails({
   return (
     <>
       <DetailHeader
-        backHref="#"
+        onBack={onBack}
         title="Record Details"
         subtitle="View detailed information about this registry record"
         actions={
-          <>
-            <button className="btn-ghost">✎ Edit</button>
-            {record.recordSource === "synchronize-from-endpoint" && (
-              <button className="btn-ghost">⟳ Sync</button>
+          <div className="relative">
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={() => setMenuOpen((o) => !o)}
+              disabled={nextActions.length === 0}
+            >
+              Update status ▾
+            </button>
+            {menuOpen && nextActions.length > 0 && (
+              <div className="absolute right-0 z-10 mt-1 w-52 rounded-lg border border-slate-200 bg-white py-1 shadow-lg">
+                {nextActions.map((a) => (
+                  <button
+                    key={a.to}
+                    type="button"
+                    onClick={() => update(a.to)}
+                    className="block w-full px-4 py-2 text-left text-sm hover:bg-slate-50"
+                  >
+                    {a.label}
+                  </button>
+                ))}
+              </div>
             )}
-            <div className="relative">
-              <button
-                className="btn-primary"
-                onClick={() => setMenuOpen((o) => !o)}
-                disabled={nextActions.length === 0}
-              >
-                Update status ▾
-              </button>
-              {menuOpen && nextActions.length > 0 && (
-                <div className="absolute right-0 z-10 mt-1 w-52 rounded-lg border border-slate-200 bg-white py-1 shadow-lg">
-                  {nextActions.map((a) => (
-                    <button
-                      key={a.to}
-                      onClick={() => update(a.to)}
-                      className="block w-full px-4 py-2 text-left text-sm hover:bg-slate-50"
-                    >
-                      {a.label}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          </>
+          </div>
         }
       />
 
-      {/* allow clicking the inline back button */}
-      <div className="px-8 pt-4">
-        <button
-          onClick={onBack}
-          className="text-sm text-slate-500 hover:text-slate-900"
-        >
-          ← Back to registry
-        </button>
-      </div>
-
-      <div className="space-y-6 px-8 py-4 pb-10">
+      <div className="space-y-6 px-4 py-4 pb-10 sm:px-6 lg:px-8">
         <div className="flex items-center gap-3">
           <h2 className="text-2xl font-bold">{record.name}</h2>
           <Pill status={record.status} />
@@ -854,7 +841,13 @@ function RecordDetails({
                       </div>
                     )}
                   </div>
-                  <button className="btn-primary shrink-0">▷ Test tool</button>
+                  <Link
+                    href="/playground"
+                    className="btn-primary shrink-0"
+                    aria-label={`Test ${t} in the Playground`}
+                  >
+                    ▷ Test in Playground
+                  </Link>
                 </div>
               );
             })}

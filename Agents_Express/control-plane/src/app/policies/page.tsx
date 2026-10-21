@@ -85,12 +85,12 @@ export default function PolicyLibraryPage() {
           </button>
         }
       />
-      <div className="px-8 pb-10">
+      <div className="px-4 pb-10 sm:px-6 lg:px-8">
         {policies.length === 0 ? (
           <EmptyState text="No policies yet." />
         ) : (
-          <div className="card overflow-hidden">
-            <table className="w-full text-sm">
+          <div className="card overflow-x-auto">
+            <table className="w-full min-w-[40rem] text-sm">
               <thead>
                 <tr className="bg-slate-50 text-left text-xs font-semibold text-slate-500">
                   <th className="px-4 py-3">Policy name</th>
@@ -527,7 +527,9 @@ function PolicyDetail({
                         </div>
                       </div>
                       {v.version !== latest.version && (
-                        <button className="btn-ghost text-xs">Revert</button>
+                        <span className="badge bg-slate-100 text-slate-500">
+                          Historical
+                        </span>
                       )}
                     </div>
                   ))}

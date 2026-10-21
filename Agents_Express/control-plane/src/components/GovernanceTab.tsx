@@ -55,8 +55,8 @@ export function GovernanceTab() {
             + Add
           </button>
         </div>
-        <div className="mt-4 overflow-hidden rounded-lg border border-slate-200">
-          <table className="w-full text-sm">
+        <div className="mt-4 overflow-x-auto rounded-lg border border-slate-200">
+          <table className="w-full min-w-[44rem] text-sm">
             <thead>
               <tr className="bg-slate-50 text-left text-xs font-semibold text-slate-500">
                 <th className="px-4 py-3">Target name</th>
@@ -132,8 +132,8 @@ export function GovernanceTab() {
                     🗑
                   </button>
                 </div>
-                <div className="mt-3 overflow-hidden rounded-lg border border-slate-100">
-                  <table className="w-full text-xs">
+                <div className="mt-3 overflow-x-auto rounded-lg border border-slate-100">
+                  <table className="w-full min-w-[32rem] text-xs">
                     <thead>
                       <tr className="bg-slate-50 text-left font-semibold text-slate-500">
                         <th className="px-3 py-2">Dimension values</th>
@@ -397,8 +397,8 @@ function AddRateLimitForm({ onClose, onDone }: { onClose: () => void; onDone: ()
           {entries.length === 0 ? (
             <p className="mt-2 text-xs text-slate-400">No entries yet. Add at least one (include a per- wildcard catch-all).</p>
           ) : (
-            <div className="mt-2 overflow-hidden rounded-lg border border-slate-200">
-              <table className="w-full text-xs">
+            <div className="mt-2 overflow-x-auto rounded-lg border border-slate-200">
+              <table className="w-full min-w-[32rem] text-xs">
                 <thead>
                   <tr className="bg-slate-50 text-left font-semibold text-slate-500">
                     <th className="px-3 py-2">Dimension values</th>

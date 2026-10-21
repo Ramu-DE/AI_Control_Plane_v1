@@ -11,7 +11,8 @@ export default function SettingsPage() {
   const [models, setModels] = useState<CatalogModel[]>([]);
   const [personas, setPersonas] = useState<Persona[]>([]);
   const [groups, setGroups] = useState<CognitoGroup[]>([]);
-  const [query, setQuery] = useState("");
+  const [modelQuery, setModelQuery] = useState("");
+  const [personaQuery, setPersonaQuery] = useState("");
   const [showAddModel, setShowAddModel] = useState(false);
   const [showAddPersona, setShowAddPersona] = useState(false);
   const [modelForm, setModelForm] = useState({
@@ -49,7 +50,13 @@ export default function SettingsPage() {
   const shownModels = models.filter((m) =>
     `${m.name} ${m.modelProvider} ${m.modelId}`
       .toLowerCase()
-      .includes(query.toLowerCase())
+      .includes(modelQuery.toLowerCase())
+  );
+
+  const shownPersonas = personas.filter((p) =>
+    `${p.name} ${p.email} ${p.sub} ${p.groups.join(" ")} ${p.provider}`
+      .toLowerCase()
+      .includes(personaQuery.toLowerCase())
   );
 
   return (
@@ -58,14 +65,16 @@ export default function SettingsPage() {
         title="Platform Settings"
         subtitle="Configure platform-wide settings and available resources"
       />
-      <div className="flex gap-8 px-8 pb-10">
-        <div className="w-48 shrink-0">
-          <div className="card space-y-1 p-2">
+      <div className="flex flex-col gap-6 px-4 pb-10 sm:px-6 lg:flex-row lg:gap-8 lg:px-8">
+        <div className="lg:w-48 lg:shrink-0">
+          <div className="card flex gap-1 overflow-x-auto p-2 lg:flex-col lg:space-y-1 lg:overflow-visible">
             {(["models", "personas", "governance"] as const).map((t) => (
               <button
                 key={t}
+                type="button"
                 onClick={() => setTab(t)}
-                className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm capitalize ${
+                aria-current={tab === t ? "page" : undefined}
+                className={`flex w-full shrink-0 items-center gap-2 whitespace-nowrap rounded-lg px-3 py-2 text-sm capitalize ${
                   tab === t
                     ? "bg-slate-100 font-medium text-slate-900"
                     : "text-slate-600 hover:bg-slate-50"
@@ -81,7 +90,7 @@ export default function SettingsPage() {
           </div>
         </div>
 
-        <div className="flex-1">
+        <div className="min-w-0 flex-1">
           {tab === "models" && (
             <div className="card p-6">
               <div className="flex items-start justify-between">
@@ -99,19 +108,18 @@ export default function SettingsPage() {
                 <input
                   className="input"
                   placeholder="Search models..."
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
+                  value={modelQuery}
+                  onChange={(e) => setModelQuery(e.target.value)}
                 />
               </div>
-              <div className="mt-4 overflow-hidden rounded-lg border border-slate-200">
-                <table className="w-full text-sm">
+              <div className="mt-4 overflow-x-auto rounded-lg border border-slate-200">
+                <table className="w-full min-w-[40rem] text-sm">
                   <thead>
                     <tr className="bg-slate-50 text-left text-xs font-semibold text-slate-500">
                       <th className="px-4 py-3">Name</th>
                       <th className="px-4 py-3">Model Provider</th>
                       <th className="px-4 py-3">Model ID</th>
                       <th className="px-4 py-3">Inference Provider</th>
-                      <th className="px-4 py-3" />
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -127,7 +135,6 @@ export default function SettingsPage() {
                         <td className="px-4 py-3 text-slate-600">
                           🟢 {m.inferenceProvider}
                         </td>
-                        <td className="px-4 py-3 text-right text-slate-400">⋮</td>
                       </tr>
                     ))}
                   </tbody>
@@ -154,10 +161,15 @@ export default function SettingsPage() {
                 </button>
               </div>
               <div className="mt-4">
-                <input className="input" placeholder="Search personas..." />
+                <input
+                  className="input"
+                  placeholder="Search personas..."
+                  value={personaQuery}
+                  onChange={(e) => setPersonaQuery(e.target.value)}
+                />
               </div>
-              <div className="mt-4 overflow-hidden rounded-lg border border-slate-200">
-                <table className="w-full text-sm">
+              <div className="mt-4 overflow-x-auto rounded-lg border border-slate-200">
+                <table className="w-full min-w-[48rem] text-sm">
                   <thead>
                     <tr className="bg-slate-50 text-left text-xs font-semibold text-slate-500">
                       <th className="px-4 py-3">Name</th>
@@ -165,18 +177,17 @@ export default function SettingsPage() {
                       <th className="px-4 py-3">Groups</th>
                       <th className="px-4 py-3">Provider</th>
                       <th className="px-4 py-3">Email</th>
-                      <th className="px-4 py-3" />
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {personas.length === 0 ? (
+                    {shownPersonas.length === 0 ? (
                       <tr>
-                        <td colSpan={6} className="px-4 py-8 text-center text-slate-400">
+                        <td colSpan={5} className="px-4 py-8 text-center text-slate-400">
                           No personas.
                         </td>
                       </tr>
                     ) : (
-                      personas.map((p) => (
+                      shownPersonas.map((p) => (
                         <tr key={p.id}>
                           <td className="px-4 py-3 font-medium">{p.name}</td>
                           <td className="px-4 py-3">
@@ -191,7 +202,6 @@ export default function SettingsPage() {
                             <span className="text-purple-500">◆</span> {p.provider}
                           </td>
                           <td className="px-4 py-3 text-slate-600">{p.email}</td>
-                          <td className="px-4 py-3 text-right text-slate-400">⋮</td>
                         </tr>
                       ))
                     )}
