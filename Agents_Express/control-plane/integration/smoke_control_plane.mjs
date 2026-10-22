@@ -127,6 +127,167 @@ async function readEndpoints() {
   }
 }
 
+// --------------------------------------------------------------------------- //
+async function tenantJourney() {
+  section("2b. Tenants — live usage, and plan limits that still enforce");
+
+  const r = await req("GET", "/tenants");
+  const tenants = r.json?.tenants ?? [];
+  if (!Array.isArray(tenants) || tenants.length === 0) {
+    bad("GET /api/tenants", "no tenants returned");
+    return;
+  }
+  ok(`GET /api/tenants — ${tenants.length} tenant(s)`);
+
+  // The console no longer renders `basic` / `pro`, so the API has to supply a
+  // plan name and live usage for it to render instead.
+  const sample = tenants.find((t) => t.tenantId === "fn-finance") ?? tenants[0];
+  const shapeOk =
+    typeof sample.plan === "string" &&
+    sample.usage && typeof sample.usage.agents === "number" &&
+    sample.capacity && Array.isArray(sample.capacity.lines) &&
+    Array.isArray(sample.perAgentLimits);
+  if (shapeOk) {
+    ok(`tenant payload carries plan + usage + capacity — ${sample.tenantId}: ` +
+       `plan=${sample.plan}, ${sample.usage.agents} agent(s)`);
+  } else {
+    bad("tenant payload carries plan + usage + capacity",
+        `missing fields on ${sample.tenantId}: ${JSON.stringify(Object.keys(sample))}`);
+  }
+
+  if (!/basic|pro/i.test(String(sample.plan))) {
+    ok(`plan name replaces the raw tier key — "${sample.plan}"`);
+  } else {
+    bad("plan name replaces the raw tier key", `plan is "${sample.plan}"`);
+  }
+
+  // Exactly one capacity bar, because only maxAgents is enforced per tenant.
+  const keys = (sample.capacity?.lines ?? []).map((l) => l.key);
+  if (keys.length === 1 && keys[0] === "agents") {
+    ok("only the tenant-scoped limit gets a capacity bar");
+  } else {
+    bad("only the tenant-scoped limit gets a capacity bar",
+        `got ${JSON.stringify(keys)} — per-agent ceilings must not appear here`);
+  }
+
+  // Usage must agree with the agents endpoint, or the console shows a number
+  // that contradicts the page it links to.
+  const agents = (await req("GET", "/agents")).json ?? [];
+  let agreed = true;
+  for (const t of tenants) {
+    const actual = agents.filter((a) => a.tenantId === t.id).length;
+    if (t.usage?.agents !== actual) {
+      agreed = false;
+      bad("tenant usage agrees with /api/agents",
+          `${t.tenantId}: usage says ${t.usage?.agents}, agents endpoint has ${actual}`);
+      break;
+    }
+  }
+  if (agreed) ok("tenant usage agrees with /api/agents for every tenant");
+
+  // THE REGRESSION GUARD. Removing the tier tags from the console must not
+  // have loosened the limits the API enforces. Fill a Standard tenant to its
+  // ceiling and confirm the next create is refused.
+  const slug = `smoke-cap-${Date.now().toString(36)}`;
+  const created = await req("POST", "/tenants", {
+    tenantId: slug, tenantName: "Smoke Capacity Test",
+    tier: "basic", parentId: null, type: "bu",
+  });
+  if (created.status !== 201) {
+    bad("create a Standard tenant", `status ${created.status}`);
+    return;
+  }
+  const capTenant = created.json;
+  ok(`created a Standard tenant — plan=${capTenant.plan}, ` +
+     `limit=${capTenant.config.maxAgents} agent(s)`);
+
+  const model = (await req("GET", "/catalog")).json?.find(
+    (m) => m.inferenceProvider === "Databricks Model Serving");
+  if (!model) {
+    skip("plan limit is still enforced", "no Databricks model in the catalog");
+    return;
+  }
+  const limit = capTenant.config.maxAgents;
+  let lastStatus = 0;
+  let lastError = "";
+  for (let i = 0; i <= limit; i++) {
+    const res = await req("POST", "/agents", {
+      name: `cap-probe-${i}`, tenantId: capTenant.id, modelId: model.id,
+      description: "smoke test capacity probe",
+      compute: { agentRuntimeId: "databricks-agent-runtime",
+                 modelRuntimeId: "databricks-fm-api-pay-per-token" },
+    });
+    lastStatus = res.status;
+    lastError = res.json?.error ?? "";
+    if (res.status !== 201) break;
+  }
+  if (lastStatus === 403 && /plan limit/i.test(lastError)) {
+    ok(`plan limit is still enforced — agent ${limit + 1} refused with 403`);
+  } else {
+    bad("plan limit is still enforced",
+        `after ${limit} agents the next create returned ${lastStatus}: ${lastError}`);
+  }
+  // And the message must speak the console's vocabulary, not "basic".
+  if (lastError && !/\b(basic|pro)\b/.test(lastError)) {
+    ok("the refusal uses the same plan vocabulary as the console");
+  } else if (lastError) {
+    bad("the refusal uses the same plan vocabulary as the console",
+        `error still says basic/pro: ${lastError}`);
+  }
+
+  // Usage must now show the tenant at its ceiling.
+  const after = (await req("GET", "/tenants")).json?.tenants?.find(
+    (t) => t.id === capTenant.id);
+  if (after?.capacity?.anyFull === true && after.usage.agents === limit) {
+    ok(`usage reflects the full tenant — ${after.usage.agents}/${limit}, anyFull=true`);
+  } else {
+    bad("usage reflects the full tenant",
+        `agents=${after?.usage?.agents} anyFull=${after?.capacity?.anyFull}`);
+  }
+
+  // Deep links the Tenants console emits must actually render.
+  for (const path of [`/agents?tenant=${capTenant.id}`,
+                      `/workflows?tenant=${capTenant.id}`]) {
+    const res = await fetch(`${BASE}${path}`);
+    if (res.status === 200) ok(`deep link renders — ${path}`);
+    else bad(`deep link renders — ${path}`, `status ${res.status}`);
+  }
+}
+
+async function inboundA2aJourney() {
+  section("2c. A2A inbound — this platform AS a peer");
+
+  const card = await fetch(`${BASE}/.well-known/agent-card.json`);
+  if (card.status !== 200) {
+    bad("GET /.well-known/agent-card.json", `status ${card.status}`);
+    return;
+  }
+  const body = await card.json();
+  ok(`agent card served — ${body.skills?.length ?? 0} skill(s)`);
+  if (/^https?:\/\//.test(body.url ?? "")) ok(`card advertises an rpc url — ${body.url}`);
+  else bad("card advertises an rpc url", `got ${body.url}`);
+
+  // The card is public BY DESIGN, so it must leak nothing.
+  const serialized = JSON.stringify(body);
+  const leaks = ["DATABRICKS_TOKEN", "databricks-meta-llama", "model-"]
+    .filter((s) => serialized.includes(s));
+  if (leaks.length === 0) ok("the public card exposes no model id or credential");
+  else bad("the public card exposes no model id or credential", leaks.join(", "));
+
+  // Unauthenticated RPC must fail closed.
+  const anon = await req("POST", "/a2a/rpc", {
+    jsonrpc: "2.0", id: "smoke-1", method: "message/send",
+    params: { message: { parts: [{ kind: "text", text: "hello" }] } },
+  });
+  if (anon.status === 401 || anon.status === 503) {
+    ok(`inbound A2A fails closed without a token — status ${anon.status}`);
+  } else {
+    bad("inbound A2A fails closed without a token", `status ${anon.status}`);
+  }
+  if (anon.json?.error?.code) ok("and answers in a JSON-RPC error envelope");
+  else bad("and answers in a JSON-RPC error envelope", JSON.stringify(anon.json));
+}
+
 async function registryJourney() {
   section("3. Registry — register a Databricks Model Serving model");
   const r = await req("POST", "/catalog", {
@@ -163,10 +324,26 @@ async function agentJourney() {
   section("4. Agents — create an agent bound to the Databricks model");
   if (!state.modelId) return skip("agent creation", "no model was registered");
 
+  // Pick a tenant with HEADROOM, not simply the first one.
+  //
+  // `tenants[0]` was fragile: new tenants are unshifted to the front of the
+  // store, so any earlier section that onboarded one — the capacity probe in
+  // 2b does exactly that — silently became the tenant this journey built on.
+  // When that tenant was already at its agent limit, four unrelated
+  // assertions failed with a 403 that had nothing to do with what they test.
   const tenants = await req("GET", "/tenants");
-  const tenant = (tenants.json?.tenants || [])[0];
+  const all = tenants.json?.tenants || [];
+  const headroom = (t) =>
+    (t.config?.maxAgents ?? 0) - (t.usage?.agents ?? 0);
+  const tenant = [...all].sort((a, b) => headroom(b) - headroom(a))[0];
   if (!tenant) return bad("agent creation", "no tenant available");
+  if (headroom(tenant) < 3) {
+    return skip("agent creation",
+      `no tenant has room for 3 more agents (best: ${tenant.tenantId} with ` +
+      `${headroom(tenant)})`);
+  }
   state.tenantId = tenant.id;
+  ok(`building on '${tenant.tenantId}' — ${headroom(tenant)} agent slot(s) free`);
 
   const r = await req("POST", "/agents", {
     name: `Smoke UC Analyst ${Date.now()}`,
@@ -664,6 +841,8 @@ async function negativePaths() {
 
   await pagesRender();
   await readEndpoints();
+  await tenantJourney();
+  await inboundA2aJourney();
   await registryJourney();
   await agentJourney();
   await workflowJourney();

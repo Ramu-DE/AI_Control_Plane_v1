@@ -1,14 +1,35 @@
 import { NextRequest, NextResponse } from "next/server";
 import { store, newId, logAudit } from "@/lib/store";
-import { getTierConfig, isolationForTier } from "@/lib/tiers";
+import { getTierConfig, isolationForTier, planLabel } from "@/lib/tiers";
+import { perAgentLimits, tenantCapacity, tenantUsage } from "@/lib/tenancy";
 import { Tenant, TenantTier, TierConfig } from "@/lib/types";
 
-// GET → tenants + their resolved tier configs.
+// GET → tenants + resolved tier config + LIVE usage.
+//
+// Usage is added server-side rather than left to the console to compute,
+// because the console would have to fetch agents, workflows and the registry
+// just to render a tenant tree, and would then have its own copy of "what
+// counts against a limit" — the drift that `plane.ts` and `eligibility.ts`
+// exist to prevent. Additive: every existing field is unchanged.
 export async function GET() {
-  const withConfig = store.tenants.map((t) => ({
-    ...t,
-    config: getTierConfig(t.tier),
-  }));
+  const input = {
+    tenants: store.tenants,
+    agents: store.agents,
+    workflows: store.workflows,
+    records: store.records,
+  };
+  const withConfig = store.tenants.map((t) => {
+    const config = getTierConfig(t.tier);
+    const usage = tenantUsage(t.id, input);
+    return {
+      ...t,
+      config,
+      plan: planLabel(t.tier),
+      usage,
+      capacity: tenantCapacity(usage, config, planLabel(t.tier)),
+      perAgentLimits: perAgentLimits(usage, config),
+    };
+  });
   return NextResponse.json({ tenants: withConfig });
 }
 
@@ -56,8 +77,26 @@ export async function POST(req: NextRequest) {
     category: "model",
     action: "tenant-create",
     actor: "platform-admin",
-    detail: `Onboarded tenant '${tenant.tenantName}' (${tier}, ${isolation})`,
+    detail: `Onboarded tenant '${tenant.tenantName}' (${planLabel(tier)} plan, ${isolation})`,
   });
   const config: TierConfig = getTierConfig(tier);
-  return NextResponse.json({ ...tenant, config }, { status: 201 });
+  const usage = tenantUsage(tenant.id, {
+    tenants: store.tenants,
+    agents: store.agents,
+    workflows: store.workflows,
+    records: store.records,
+  });
+  // Same shape as GET, so the console can select a freshly created tenant
+  // without a second round trip that would briefly render it as "no data".
+  return NextResponse.json(
+    {
+      ...tenant,
+      config,
+      plan: planLabel(tier),
+      usage,
+      capacity: tenantCapacity(usage, config, planLabel(tier)),
+      perAgentLimits: perAgentLimits(usage, config),
+    },
+    { status: 201 }
+  );
 }

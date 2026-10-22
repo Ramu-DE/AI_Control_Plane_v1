@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { store, newId, logAudit } from "@/lib/store";
 import { planeMismatch } from "@/lib/plane";
-import { getTierConfig } from "@/lib/tiers";
+import { getTierConfig, planLabel } from "@/lib/tiers";
 import { AgentConfig } from "@/lib/types";
 import { defaultAgentCompute, isAgentCompute } from "@/lib/runtimes";
 import type { InferenceProvider } from "@/lib/types";
@@ -34,7 +34,10 @@ export async function POST(req: NextRequest) {
   if (existing >= tier.maxAgents) {
     return NextResponse.json(
       {
-        error: `Tier limit reached: '${tenant.tenantName}' (${tenant.tier}) allows ${tier.maxAgents} agents. Upgrade to Pro for up to ${getTierConfig("pro").maxAgents}.`,
+        // Same vocabulary as the console. The console no longer shows the
+        // raw `basic`/`pro` keys, so an error that did would send an operator
+        // hunting for a word that appears nowhere in the UI.
+        error: `Plan limit reached: '${tenant.tenantName}' is on the ${planLabel(tenant.tier)} plan, which allows ${tier.maxAgents} agent(s). The ${planLabel("pro")} plan allows up to ${getTierConfig("pro").maxAgents}.`,
         upgrade: { currentTier: tenant.tier, requiredTier: "pro" },
       },
       { status: 403 }
@@ -56,7 +59,7 @@ export async function POST(req: NextRequest) {
   if (toolRefs.length > tier.maxToolsPerAgent) {
     return NextResponse.json(
       {
-        error: `Tier limit: '${tenant.tenantName}' (${tenant.tier}) allows ${tier.maxToolsPerAgent} tools per agent.`,
+        error: `Plan limit: '${tenant.tenantName}' is on the ${planLabel(tenant.tier)} plan, which allows ${tier.maxToolsPerAgent} tool(s) per agent.`,
       },
       { status: 403 }
     );
@@ -81,7 +84,7 @@ export async function POST(req: NextRequest) {
   if (knowledgeRefs.length > tier.maxKnowledgeBases) {
     return NextResponse.json(
       {
-        error: `Tier limit: '${tenant.tenantName}' (${tenant.tier}) allows ${tier.maxKnowledgeBases} knowledge base(s) per agent.`,
+        error: `Plan limit: '${tenant.tenantName}' is on the ${planLabel(tenant.tier)} plan, which allows ${tier.maxKnowledgeBases} knowledge base(s) per agent.`,
       },
       { status: 403 }
     );
@@ -94,7 +97,7 @@ export async function POST(req: NextRequest) {
   if (memoryRefs.length > tier.maxMemories) {
     return NextResponse.json(
       {
-        error: `Tier limit: '${tenant.tenantName}' (${tenant.tier}) allows ${tier.maxMemories} memory/memories per agent.`,
+        error: `Plan limit: '${tenant.tenantName}' is on the ${planLabel(tenant.tier)} plan, which allows ${tier.maxMemories} memory/memories per agent.`,
       },
       { status: 403 }
     );

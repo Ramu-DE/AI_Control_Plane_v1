@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import Link from "next/link";
+import { useEffect, useMemo, useState } from "react";
 import {
   PageHeader,
   DetailHeader,
@@ -36,6 +37,17 @@ export default function AgentsPage() {
   const [tenants, setTenants] = useState<(Tenant & { config: { maxAgents: number } })[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
+  // Deep link from the Tenants console: /agents?tenant=<id>.
+  //
+  // Read from `window.location` in an effect rather than with
+  // `useSearchParams`, which forces a Suspense boundary and fails the
+  // production build if one is missing. A query parameter is not worth risking
+  // the build over.
+  const [tenantFilter, setTenantFilter] = useState<string | null>(null);
+  useEffect(() => {
+    const id = new URLSearchParams(window.location.search).get("tenant");
+    if (id) setTenantFilter(id);
+  }, []);
 
   async function load() {
     const [a, m, r, t] = await Promise.all([
@@ -52,6 +64,11 @@ export default function AgentsPage() {
   useEffect(() => {
     load();
   }, []);
+
+  const visibleAgents = useMemo(
+    () => (tenantFilter ? agents.filter((a) => a.tenantId === tenantFilter) : agents),
+    [agents, tenantFilter]
+  );
 
   const agent = agents.find((a) => a.id === selected);
 
@@ -82,11 +99,37 @@ export default function AgentsPage() {
         }
       />
       <div className="px-8 pb-10">
-        {agents.length === 0 ? (
-          <EmptyState text="No agents found." />
+        {tenantFilter && (
+          <div className="mb-4 flex items-center gap-2 text-sm">
+            <span className="text-slate-500">Filtered to</span>
+            <span className="badge bg-slate-900 text-white">
+              {tenants.find((t) => t.id === tenantFilter)?.tenantName ?? tenantFilter}
+            </span>
+            <button
+              className="text-xs text-slate-400 underline hover:text-slate-700"
+              onClick={() => setTenantFilter(null)}
+            >
+              show all tenants
+            </button>
+            <Link
+              href="/tenants"
+              className="ml-auto text-xs text-slate-400 hover:text-slate-700"
+            >
+              ← back to Tenants
+            </Link>
+          </div>
+        )}
+        {visibleAgents.length === 0 ? (
+          <EmptyState
+            text={
+              tenantFilter
+                ? "No agents in this tenant yet."
+                : "No agents found."
+            }
+          />
         ) : (
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {agents.map((a) => (
+            {visibleAgents.map((a) => (
               <button
                 key={a.id}
                 onClick={() => setSelected(a.id)}
@@ -105,6 +148,16 @@ export default function AgentsPage() {
                 <p className="mt-3 line-clamp-2 text-sm text-slate-500">
                   {a.description}
                 </p>
+                {/* Which tenant an agent belongs to decides which model and
+                    tools it may use, so it belongs on the card rather than
+                    two clicks away. */}
+                <div className="mt-3 flex items-center gap-2 border-t border-slate-100 pt-3 text-xs text-slate-400">
+                  <span className="truncate">
+                    {tenants.find((t) => t.id === a.tenantId)?.tenantName ??
+                      a.tenantId}
+                  </span>
+                  <span className="ml-auto shrink-0">{a.status}</span>
+                </div>
               </button>
             ))}
           </div>

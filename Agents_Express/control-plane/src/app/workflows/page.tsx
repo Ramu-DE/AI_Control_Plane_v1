@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import Link from "next/link";
+import { useEffect, useMemo, useState } from "react";
 import { PageHeader, Pill, EmptyState, Field, Modal } from "@/components/ui";
 import { getJSON, sendJSON } from "@/lib/api";
 import {
@@ -60,6 +61,14 @@ export default function WorkflowsPage() {
   const [personaId, setPersonaId] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [error, setError] = useState("");
+  // Deep link from the Tenants console: /workflows?tenant=<id>. Read from
+  // window.location rather than useSearchParams, which would require a
+  // Suspense boundary and can fail the production build without one.
+  const [tenantFilter, setTenantFilter] = useState<string | null>(null);
+  useEffect(() => {
+    const id = new URLSearchParams(window.location.search).get("tenant");
+    if (id) setTenantFilter(id);
+  }, []);
 
   async function load() {
     const d = await getJSON<WorkflowsData>("/api/workflows");
@@ -80,6 +89,12 @@ export default function WorkflowsPage() {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const visibleWorkflows = useMemo(
+    () =>
+      tenantFilter ? workflows.filter((w) => w.tenantId === tenantFilter) : workflows,
+    [workflows, tenantFilter]
+  );
 
   const wf = workflows.find((w) => w.id === selectedWf);
 
@@ -191,10 +206,41 @@ export default function WorkflowsPage() {
         {/* LEFT: workflow list + designer */}
         <div className="space-y-4">
           <div className="card p-3">
-            <div className="mb-1 px-1 text-xs font-semibold uppercase text-slate-400">
-              Workflows
+            <div className="mb-1 flex items-baseline justify-between px-1">
+              <span className="text-xs font-semibold uppercase text-slate-400">
+                Workflows
+              </span>
+              {tenantFilter && (
+                <button
+                  className="text-[10px] text-slate-400 underline hover:text-slate-700"
+                  onClick={() => setTenantFilter(null)}
+                >
+                  show all
+                </button>
+              )}
             </div>
-            {workflows.map((w) => (
+            {tenantFilter && (
+              <div className="mb-2 flex items-center gap-1.5 px-1 text-[11px]">
+                <span className="badge bg-slate-900 text-white">
+                  {tenants.find((t) => t.id === tenantFilter)?.tenantName ??
+                    tenantFilter}
+                </span>
+                <Link
+                  href="/tenants"
+                  className="ml-auto text-slate-400 hover:text-slate-700"
+                >
+                  ← Tenants
+                </Link>
+              </div>
+            )}
+            {visibleWorkflows.length === 0 && (
+              <p className="px-3 py-2 text-xs text-slate-400">
+                {tenantFilter
+                  ? "No workflows in this tenant yet."
+                  : "No workflows yet."}
+              </p>
+            )}
+            {visibleWorkflows.map((w) => (
               <button
                 key={w.id}
                 onClick={() => setSelectedWf(w.id)}
@@ -206,7 +252,10 @@ export default function WorkflowsPage() {
               >
                 {w.name}
                 <div className="text-xs text-slate-400">
-                  {w.steps.length} steps
+                  {w.steps.length} step{w.steps.length === 1 ? "" : "s"}
+                  {" · "}
+                  {tenants.find((t) => t.id === w.tenantId)?.tenantName ??
+                    w.tenantId}
                 </div>
               </button>
             ))}
@@ -604,6 +653,14 @@ function CreateWorkflowModal({
     { name: "Step 1", mode: "agent", agentId: "", modelId: "", prompt: "", reviewGate: false },
   ]);
   const [error, setError] = useState("");
+  // Deep link from the Tenants console: /workflows?tenant=<id>. Read from
+  // window.location rather than useSearchParams, which would require a
+  // Suspense boundary and can fail the production build without one.
+  const [tenantFilter, setTenantFilter] = useState<string | null>(null);
+  useEffect(() => {
+    const id = new URLSearchParams(window.location.search).get("tenant");
+    if (id) setTenantFilter(id);
+  }, []);
   const [busy, setBusy] = useState(false);
 
   // Eligibility uses the SAME rule as the resolver: the agent's tenant must be
