@@ -11,6 +11,7 @@
 // and fails closed with typed errors so the route maps them to honest statuses.
 
 import { selectTools } from "../tools/registry";
+import { narrowTools } from "../tools/discover";
 import type { ToolSpec } from "../tools/registry";
 import type {
   AgentConfig,
@@ -161,11 +162,24 @@ export function resolveStep(step: WorkflowStep, ctx: ResolveContext): ResolvedSt
   }
   // Split the approved names into what the platform can actually run and what
   // it cannot. Never imply execution for an unimplemented tool.
-  const { available: executableTools, unimplemented } = selectTools(resolvedTools);
+  const { available: implementedTools, unimplemented } = selectTools(resolvedTools);
+  // Narrow the catalog to what this step's task plausibly needs. This happens
+  // strictly INSIDE the approved+implemented set, so it can only remove
+  // candidates — the registry and Cedar remain the authorities on what an agent
+  // may do. Withholding is reported, never silent.
+  const selection = narrowTools(implementedTools, `${step.name} ${step.prompt ?? ""}`);
+  const executableTools = selection.offered;
   if (executableTools.length > 0) {
     notes.push(
       `${executableTools.length} executable tool(s) offered to the model: ` +
         executableTools.map((t) => t.name).join(", ")
+    );
+  }
+  if (!selection.complete) {
+    notes.push(
+      `${selection.withheld.length} approved tool(s) withheld to keep the catalog ` +
+        `under ${selection.maxTools} for this step: ` +
+        selection.withheld.map((w) => w.name).join(", ")
     );
   }
   if (unimplemented.length > 0) {

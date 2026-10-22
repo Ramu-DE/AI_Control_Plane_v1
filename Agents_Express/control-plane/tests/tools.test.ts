@@ -9,6 +9,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { interpretRows, isReadOnlySql } from "../src/lib/tools/uc.ts";
+import { narrowTools } from "../src/lib/tools/discover.ts";
+import type { ToolSpec } from "../src/lib/tools/registry.ts";
 import {
   TOOL_IMPLEMENTATIONS,
   executeToolCall,
@@ -206,4 +208,99 @@ test("a missing or malformed manifest does not claim completeness falsely", () =
   const out = interpretRows(fifty, {});
   assert.equal(typeof out.truncated, "boolean");
   assert.equal(out.rowCount, 50);
+});
+
+// --------------------------------------------------------------------------- //
+// Tool discovery — narrowing the catalog
+// --------------------------------------------------------------------------- //
+// "Discovery narrows the catalog. Authorization still applies." Narrowing runs
+// strictly inside the approved+implemented set, so it can only ever REMOVE a
+// candidate. If it could introduce one, it would be privilege escalation
+// dressed up as a convenience.
+
+function spec(name: string, description: string): ToolSpec {
+  return {
+    name,
+    description,
+    parameters: { type: "object", properties: {} },
+    // Narrowing never invokes a tool, so a stub is enough here — and it must
+    // throw rather than return, so a test that accidentally calls it fails
+    // loudly instead of looking like it worked.
+    execute: async () => {
+      throw new Error("narrowing must not invoke a tool");
+    },
+  };
+}
+
+test("a catalog at or below the ceiling is never trimmed", () => {
+  const four = [spec("a", "x"), spec("b", "y"), spec("c", "z"), spec("d", "w")];
+  const out = narrowTools(four, "something entirely unrelated", 6);
+  assert.equal(out.offered.length, 4, "all four must still be offered");
+  assert.equal(out.withheld.length, 0);
+  assert.equal(out.complete, true);
+  // Scoring a small catalog would withhold a tool the model needed just
+  // because the prompt happened not to name it.
+});
+
+test("the most relevant tools are offered first when the ceiling bites", () => {
+  const tools = [
+    spec("send_email", "Send an email message to a recipient"),
+    spec("uc_list_tables", "List tables in a Unity Catalog schema"),
+    spec("create_ticket", "Open a support ticket"),
+    spec("uc_query", "Run a read-only SQL query against Unity Catalog"),
+  ];
+  const out = narrowTools(tools, "List the Unity Catalog tables in this schema", 2);
+  assert.equal(out.offered.length, 2);
+  const names = out.offered.map((t) => t.name);
+  assert.ok(
+    names.includes("uc_list_tables"),
+    `the obviously relevant tool must be offered, got ${names.join(", ")}`
+  );
+  assert.equal(out.complete, false, "a trimmed catalog must not claim completeness");
+  assert.equal(out.withheld.length, 2);
+  for (const w of out.withheld) {
+    assert.ok(w.reason, `every withheld tool needs a stated reason: ${w.name}`);
+  }
+});
+
+test("narrowing can only remove, never add", () => {
+  const tools = [spec("only_tool", "the one tool")];
+  const out = narrowTools(tools, "a task mentioning nothing relevant", 1);
+  assert.deepEqual(out.offered.map((t) => t.name), ["only_tool"]);
+  // And the offered set is always a subset of what was passed in.
+  const bigger = [spec("a", "alpha"), spec("b", "beta"), spec("c", "gamma")];
+  const trimmed = narrowTools(bigger, "alpha", 1);
+  for (const t of trimmed.offered) {
+    assert.ok(
+      bigger.some((b) => b.name === t.name),
+      "an offered tool must have come from the approved input set"
+    );
+  }
+});
+
+test("narrowing is deterministic, so a re-run offers the same tools", () => {
+  const tools = [
+    spec("t1", "nothing in common"),
+    spec("t2", "also nothing"),
+    spec("t3", "still nothing"),
+  ];
+  // All score zero; ties must break on original order, not hash order.
+  const a = narrowTools(tools, "unrelated task", 2);
+  const b = narrowTools(tools, "unrelated task", 2);
+  assert.deepEqual(a.offered.map((t) => t.name), b.offered.map((t) => t.name));
+  assert.deepEqual(a.offered.map((t) => t.name), ["t1", "t2"]);
+});
+
+test("the tool NAME outweighs a verbose description", () => {
+  const tools = [
+    spec("unrelated_helper", "query query query sql sql tables tables catalog"),
+    spec("uc_query", "Run one statement"),
+    spec("filler", "nothing"),
+  ];
+  const out = narrowTools(tools, "run a uc_query", 1);
+  assert.equal(
+    out.offered[0].name,
+    "uc_query",
+    "a precisely-named tool must not be out-scored by keyword stuffing"
+  );
 });
