@@ -216,7 +216,12 @@ export async function ucQuery(sql: string): Promise<{
   if (status.state !== "SUCCEEDED") {
     const msg = ((status.error as Record<string, unknown>) ?? {}).message;
     throw new UcToolError(
-      `query ${String(status.state)}${msg ? `: ${String(msg).slice(0, 240)}` : ""}`
+      // Keep enough of the message for the "Did you mean one of the following?
+      // [...]" suggestion to survive. Databricks puts the candidate column
+      // list there, and it is what lets the model self-correct on the next
+      // call instead of guessing again. 240 was enough for a narrow table but
+      // a wide one pushes the list past it.
+      `query ${String(status.state)}${msg ? `: ${String(msg).slice(0, 700)}` : ""}`
     );
   }
   const manifest = (res.manifest as Record<string, unknown>) ?? {};

@@ -201,6 +201,24 @@ async function advance(run: WorkflowRun, workflow: Workflow): Promise<void> {
       // than inventing a dollar figure. Tokens still accumulate.
       run.totalCostUsd += result.costUsd ?? 0;
 
+      // A step that produced NO text is not done. It was previously marked
+      // "done" and its empty output fed the next step, which then asked for
+      // data the earlier step had already fetched — a chain that looks like it
+      // ran and silently carried nothing. Fail here instead, where the cause
+      // is visible, rather than three steps later where it is not.
+      if (!String(sr.output ?? "").trim()) {
+        sr.status = "error";
+        sr.error =
+          "the step produced no output, so there is nothing to pass on. " +
+          (result.toolCalls?.length
+            ? `${result.toolCalls.length} tool call(s) ran, so the data was ` +
+              `fetched but never synthesised.`
+            : "no tool calls ran either.");
+        run.status = "error";
+        run.updatedAt = new Date().toISOString();
+        return;
+      }
+
       if (step.reviewGate) {
         sr.status = "awaiting-review";
         run.status = "paused";

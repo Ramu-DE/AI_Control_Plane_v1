@@ -207,7 +207,12 @@ function addUsage(a: TokenUsage, b: TokenUsage): TokenUsage {
 }
 
 /** Maximum model↔tool round trips before we stop and answer with what we have. */
-export const MAX_TOOL_ITERATIONS = 4;
+// Bounded to stop a runaway loop. Raised from 4 because a legitimate
+// investigation — describe a table, then query two or three — plus one
+// self-corrected column guess already exceeded it, and the step then had no
+// budget left to answer. The final-synthesis turn below is what guarantees an
+// answer regardless; this just stops the bound being hit routinely.
+export const MAX_TOOL_ITERATIONS = 6;
 
 /**
  * Execute a step WITH real tool calling.
@@ -235,10 +240,28 @@ export async function runStepOnDatabricksWithTools(
 
   const context =
     priorOutputs.length > 0
-      ? "Prior step outputs:\n" +
+      ? "Findings already established by EARLIER STEPS of this workflow. These " +
+        "came from governed steps that used the same tools, so treat them as " +
+        "evidence you already have — do not ask for them again, and do not " +
+        "re-query to reproduce them:\n" +
         priorOutputs.map((p) => `### ${p.name}\n${p.output}`).join("\n\n") +
         "\n\n"
       : "";
+
+  // The instruction below used to end "Base your answer only on tool results."
+  // With prior step outputs in the same prompt, that was a direct conflict: a
+  // later step was handed an earlier step's findings and simultaneously told to
+  // disregard anything that was not its own tool result. Observed live — step 3
+  // received the lane analysis from step 2 and then asked the Supply Chain
+  // agent for the lane data again. A three-step workflow was behaving as three
+  // unrelated calls.
+  const evidenceRule = priorOutputs.length > 0
+    ? `Answer from the earlier findings above PLUS anything you verify with the ` +
+      `tools. Do not invent facts that are in neither. If an earlier step left ` +
+      `something unverified, you may check it — but do not re-request what it ` +
+      `already established.`
+    : `Use the provided tools to obtain real data before answering, and base ` +
+      `your answer only on tool results. Do not invent data.`;
 
   const messages: ChatMessage[] = [
     {
@@ -247,8 +270,7 @@ export async function runStepOnDatabricksWithTools(
         `Overall task:\n${task}\n\n` +
         context +
         `You are the "${step.name}" agent. ${step.prompt}\n\n` +
-        `Use the provided tools to obtain real data before answering. ` +
-        `Base your answer only on tool results.`,
+        evidenceRule,
     },
   ];
 
@@ -307,9 +329,42 @@ export async function runStepOnDatabricksWithTools(
     }
 
     if (iteration === MAX_TOOL_ITERATIONS - 1) {
-      notes.push(
-        `tool loop hit its ${MAX_TOOL_ITERATIONS}-iteration bound; answering with the results so far`
-      );
+      notes.push(`tool loop hit its ${MAX_TOOL_ITERATIONS}-iteration bound`);
+    }
+  }
+
+  // FINAL SYNTHESIS. Without this the loop could end having executed tools and
+  // never asked the model to answer, leaving `output` empty — which is exactly
+  // what happened: a step fetched its lane data, hit the bound, reported
+  // "answering with the results so far", and returned nothing. The next step
+  // then asked for data that had already been retrieved.
+  //
+  // `tool_choice: "none"` is the whole point: the model keeps the tool RESULTS
+  // in its messages but cannot request another call, so it has to answer from
+  // what it has.
+  if (!output && toolCalls.length > 0) {
+    notes.push("forcing a final answer from the tool results already gathered");
+    const { body, latencyMs: finalMs } = await postChat(host, token, endpoint, {
+      messages: [
+        ...messages,
+        {
+          role: "user",
+          content:
+            "Answer now, using only the tool results above. Do not request " +
+            "another tool. If something you wanted is missing, say which part " +
+            "is unverified and answer with the rest.",
+        },
+      ],
+      tool_choice: "none",
+      max_tokens: 800,
+      temperature: 0.2,
+    });
+    latencyMs += finalMs;
+    usage = addUsage(usage, toTokenUsage(body.usage as DatabricksUsage | undefined));
+    const { text, droppedBlocks } = extractContent(body);
+    output = text;
+    if (droppedBlocks > 0) {
+      notes.push(`${droppedBlocks} non-text content block(s) omitted from the output`);
     }
   }
 
