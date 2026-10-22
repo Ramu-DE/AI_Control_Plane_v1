@@ -328,9 +328,47 @@ export async function POST(req: NextRequest) {
       updatedAt: now,
     };
     store.workflowRuns.unshift(run);
-    await advance(run, wf); // real Bedrock calls
-    logAudit({ category: "agent", action: "workflow-run", actor: "console-user", detail: `Started run of '${wf.name}' → ${run.status}` });
-    return NextResponse.json(run, { status: 201 });
+    logAudit({
+      category: "agent",
+      action: "workflow-run",
+      actor: "console-user",
+      detail: `Started run of '${wf.name}' (${wf.steps.length} step(s))`,
+    });
+
+    // DO NOT await. A multi-step workflow makes several model calls, each of
+    // which may itself loop over tool calls, so a three-step run measured
+    // 27-29 seconds and a slower one exceeds the 30-second origin timeout in
+    // front of this app — the caller then sees a 504 while the run is in fact
+    // progressing fine. Holding an HTTP request open for the length of an
+    // agentic workflow is the wrong shape regardless of the limit.
+    //
+    // The run is already in the store with status "running", so the client gets
+    // it immediately and polls. Failures are recorded ON THE RUN by advance()
+    // and surface through the same polling; the catch here is only for a throw
+    // that escapes it entirely, which must still leave the run in a terminal
+    // state rather than "running" forever.
+    void advance(run, wf)
+      .then(() => {
+        logAudit({
+          category: "agent",
+          action: "workflow-run",
+          actor: "console-user",
+          detail: `Run of '${wf.name}' finished → ${run.status}`,
+        });
+      })
+      .catch((e: unknown) => {
+        run.status = "error";
+        run.updatedAt = new Date().toISOString();
+        const detail = (e as Error)?.message ?? String(e);
+        logAudit({
+          category: "agent",
+          action: "workflow-run-failed",
+          actor: "console-user",
+          detail: `Run of '${wf.name}' failed outside step handling: ${detail}`,
+        });
+      });
+
+    return NextResponse.json(run, { status: 202 });
   }
 
   if (body.op === "decision") {

@@ -64,6 +64,30 @@ async function req(method, path, body) {
 
 const state = {};
 
+/**
+ * Wait for a run to settle.
+ *
+ * `op:"start"` returns 202 with the run still "running" — a multi-step agentic
+ * workflow takes far longer than an HTTP request should be held open for, and
+ * awaiting it produced a 504 at the proxy. So the test polls, exactly as the UI
+ * does. Asserting on the immediate response would be asserting on a run that
+ * has not happened yet.
+ */
+async function waitForRun(runId, timeoutMs = 240000) {
+  const TERMINAL = ["completed", "error", "paused", "denied"];
+  const deadline = Date.now() + timeoutMs;
+  let last = null;
+  while (Date.now() < deadline) {
+    const r = await req("GET", "/workflows");
+    const runs = r.json?.runs || [];
+    last = runs.find((x) => x.id === runId) || last;
+    if (last && TERMINAL.includes(last.status)) return last;
+    await new Promise((res) => setTimeout(res, 3000));
+  }
+  return last;
+}
+
+
 // --------------------------------------------------------------------------- //
 async function pagesRender() {
   section("1. Navigation — every page in the sidebar returns a document");
@@ -250,9 +274,14 @@ async function workflowJourney() {
   if (start.status >= 300) {
     return bad("POST /api/workflows {op:start}", `status ${start.status}: ${start.text.slice(0, 300)}`);
   }
-  const run = start.json?.run || start.json;
-  state.runId = run?.id;
-  ok("POST /api/workflows {op:start}", `run ${state.runId} status=${run?.status}`);
+  const accepted = start.json?.run || start.json;
+  state.runId = accepted?.id;
+  ok("POST /api/workflows {op:start}", `202 accepted, run ${state.runId}`);
+
+  console.log("  ....  polling until the run settles");
+  const run = await waitForRun(state.runId);
+  if (!run) return bad("workflow run settled", "the run never appeared");
+  ok("workflow run settled", `status=${run.status}`);
 
   const steps = run?.steps || [];
   if (!steps.length) return bad("workflow produced a step run", "no steps in the run");
@@ -389,7 +418,10 @@ async function toolExecutionJourney() {
   if (run.status >= 300) {
     return bad("run tool-bound workflow", `status ${run.status}: ${run.text.slice(0, 220)}`);
   }
-  const step = ((run.json?.run || run.json)?.steps || [])[0] || {};
+  const accepted2 = run.json?.run || run.json;
+  const settled = await waitForRun(accepted2?.id);
+  if (!settled) return bad("tool-bound run settled", "the run never appeared");
+  const step = (settled.steps || [])[0] || {};
 
   const calls = step.toolCalls || [];
   if (calls.length) {

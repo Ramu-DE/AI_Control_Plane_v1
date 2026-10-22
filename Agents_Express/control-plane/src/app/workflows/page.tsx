@@ -48,9 +48,9 @@ export default function WorkflowsPage() {
   const [runs, setRuns] = useState<WorkflowRun[]>([]);
   const [selectedWf, setSelectedWf] = useState<string | null>(null);
   const [activeRun, setActiveRun] = useState<WorkflowRun | null>(null);
-  const [input, setInput] = useState(
-    "Employee submitted a $4,200 business-class flight to a conference in Tokyo. Category: travel."
-  );
+  // Left empty on purpose. A prefilled example from an unrelated demo gets
+  // submitted by accident and then the run's answer makes no sense.
+  const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [reviseText, setReviseText] = useState("");
   const [agents, setAgents] = useState<AgentOption[]>([]);
@@ -94,13 +94,42 @@ export default function WorkflowsPage() {
         input,
         personaId: personaId || undefined,
       });
+      // The server returns 202 with the run still "running": a multi-step
+      // agentic workflow takes far longer than an HTTP request should be held
+      // open for. Show it immediately, then poll until it settles.
       setActiveRun(run);
       await load();
+      void pollRun(run.id);
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setBusy(false);
     }
+  }
+
+  /** Poll one run until it reaches a terminal state, or we give up waiting. */
+  async function pollRun(runId: string) {
+    const TERMINAL = ["completed", "error", "paused", "denied"];
+    for (let i = 0; i < 150; i++) {
+      await new Promise((r) => setTimeout(r, 2000));
+      try {
+        const data = await getJSON<WorkflowsData>("/api/workflows");
+        setWorkflows(data.workflows);
+        setRuns(data.runs);
+        const fresh = data.runs.find((r) => r.id === runId);
+        if (fresh) {
+          setActiveRun(fresh);
+          if (TERMINAL.includes(fresh.status)) return;
+        }
+      } catch {
+        // A transient poll failure is not a run failure — keep waiting. The
+        // run's own status is the authority, and it lives on the server.
+      }
+    }
+    setError(
+      "Stopped polling after 5 minutes. The run may still be progressing — " +
+        "reopen it from the run list to see where it got to."
+    );
   }
 
   async function decide(decision: "approve" | "revise" | "deny") {
@@ -229,7 +258,8 @@ export default function WorkflowsPage() {
           <div className="card p-5">
             <h3 className="text-sm font-semibold">Run (Execution Plane)</h3>
             <p className="mt-0.5 text-xs text-slate-500">
-              Each step is a real Bedrock Converse call. Gated steps pause for
+              Each step is a real model call on the plane its agent declares —
+              Bedrock or Databricks. Gated steps pause for
               your approval.
             </p>
             <div className="mt-3">
@@ -262,7 +292,7 @@ export default function WorkflowsPage() {
               onClick={startRun}
               disabled={busy || !wf}
             >
-              {busy ? "Running on Bedrock…" : "▶ Start run"}
+              {busy ? "Starting…" : "▶ Start run"}
             </button>
           </div>
 
@@ -476,11 +506,29 @@ function StepCard({
         </div>
       )}
       {sr.toolCalls && sr.toolCalls.length > 0 && (
-        <div className="mt-2 rounded-lg border border-indigo-200 bg-indigo-50 p-2 text-xs text-indigo-900">
-          <div className="font-medium">
-            {sr.toolCalls.length} tool call(s) executed by the model
-          </div>
-          <ul className="mt-1 space-y-1">
+        // Collapsed by default. Expanded, every call printed its full
+        // arguments and a result blob, so a step with six calls buried its own
+        // answer under a wall of JSON. The summary line carries what you scan
+        // for — how many ran and how many failed — and the detail is one click
+        // away for when you need it.
+        <details className="mt-2 rounded-lg border border-indigo-200 bg-indigo-50 text-xs text-indigo-900">
+          <summary className="cursor-pointer select-none px-2 py-1.5 font-medium">
+            {sr.toolCalls.length} tool call{sr.toolCalls.length === 1 ? "" : "s"}
+            {(() => {
+              const failed = sr.toolCalls!.filter((c) => !c.ok).length;
+              return failed > 0 ? (
+                <span className="ml-1 font-normal text-red-700">
+                  · {failed} failed
+                </span>
+              ) : (
+                <span className="ml-1 font-normal text-green-700">· all ok</span>
+              );
+            })()}
+            <span className="ml-1 font-normal text-indigo-600">
+              · {sr.toolCalls.map((c) => c.name).filter((n, i, a) => a.indexOf(n) === i).join(", ")}
+            </span>
+          </summary>
+          <ul className="space-y-1.5 border-t border-indigo-200 px-2 py-2">
             {sr.toolCalls.map((c, i) => (
               <li key={i}>
                 <span className="mono font-medium">{c.name}</span>
@@ -488,16 +536,16 @@ function StepCard({
                   {c.ok ? "ok" : "failed"}
                 </span>
                 <span className="ml-1 text-indigo-700">· {c.latencyMs}ms</span>
-                <div className="mono mt-0.5 break-all text-[11px] text-indigo-800">
+                <div className="mono mt-0.5 line-clamp-2 break-all text-[11px] text-indigo-800">
                   args {JSON.stringify(c.arguments)}
                 </div>
-                <div className="mono break-all text-[11px] text-indigo-600">
+                <div className="mono line-clamp-2 break-all text-[11px] text-indigo-600">
                   {c.resultPreview.slice(0, 180)}
                 </div>
               </li>
             ))}
           </ul>
-        </div>
+        </details>
       )}
       {sr.notes && sr.notes.length > 0 && (
         <ul className="mt-2 space-y-0.5 text-xs text-amber-700">
