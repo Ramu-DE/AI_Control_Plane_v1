@@ -71,6 +71,35 @@ from .mapping import (
     name_similarity,
     discovery_fingerprint,
     UnapprovedPublishError,
+    AutoApprovalPolicy,
+    AutoApprovalResult,
+    auto_approve,
+    auto_approval_verdict,
+    was_auto_approved,
+    AUTO_APPROVE_MIN_CONFIDENCE,
+    NAME_SIMILARITY_MAX_CONFIDENCE,
+    HARD_EVIDENCE_KINDS,
+)
+
+# --- ontology-first: supplied ontology -> real graph ---
+from .ontology import NeptuneOntologyClient, make_ontology_client
+from .ontology_file import (
+    RdfFileOntologyClient,
+    OntologyFileError,
+    infer_format,
+    is_meta_term,
+)
+from .materialize import (
+    MaterializationError,
+    MaterializationResult,
+    materialize_to_nquads,
+    write_nquads,
+    drop_graph_sparql,
+    mint_subject_iri,
+    typed_literal,
+    escape_literal,
+    iri_segment,
+    DEFAULT_GRAPH_PREFIX,
 )
 from .planner import (
     Projection,
@@ -136,6 +165,17 @@ __all__ = [
     "propose_mappings", "approve", "reject", "publish_mappings", "to_r2rml",
     "name_similarity", "discovery_fingerprint", "UnapprovedPublishError",
     "R2RMLError",
+    # threshold auto-approval
+    "AutoApprovalPolicy", "AutoApprovalResult", "auto_approve",
+    "auto_approval_verdict", "was_auto_approved",
+    "AUTO_APPROVE_MIN_CONFIDENCE", "NAME_SIMILARITY_MAX_CONFIDENCE",
+    "HARD_EVIDENCE_KINDS",
+    # ontology-first ingest + materialisation
+    "NeptuneOntologyClient", "make_ontology_client", "RdfFileOntologyClient",
+    "OntologyFileError", "infer_format", "is_meta_term",
+    "MaterializationError", "MaterializationResult", "materialize_to_nquads",
+    "write_nquads", "drop_graph_sparql", "mint_subject_iri", "typed_literal",
+    "escape_literal", "iri_segment", "DEFAULT_GRAPH_PREFIX",
     # planner
     "Projection", "Filter", "Aggregation", "JoinPath", "SemanticQueryPlan",
     "CompiledQuery", "SemanticPlanner", "SqlCompiler", "ConceptRef", "AggKind",

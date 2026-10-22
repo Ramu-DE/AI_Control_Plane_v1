@@ -14,6 +14,11 @@ dependencies = [
 
 [project.optional-dependencies]
 serving = ["mlflow>=2.12.0", "pandas>=2.0.0"]
+# Reading a SUPPLIED ontology file needs an RDF parser. Kept optional so the
+# Neptune path, the precision path and materialisation stay stdlib-only —
+# `materialize.py` writes N-Quads by hand precisely so emitting a graph does
+# not depend on this.
+ontology = ["rdflib>=7.0"]
 # pyspark + databricks-vectorsearch are provided by the Databricks runtime.
 
 [tool.setuptools.packages.find]

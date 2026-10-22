@@ -56,13 +56,14 @@ def synth_aliases(label: str, local: str) -> str:
 def fetch_ontology_schema(source: GraphSource, client=None) -> dict[str, list[dict]]:
     """Read classes/properties/relationships from the ontology (read-only).
 
-    `client` may be injected (for tests/fakes); otherwise a NeptuneOntologyClient
-    is created from the descriptor.
+    `client` may be injected (for tests/fakes); otherwise the adapter named by
+    `ontology.type` is created from the descriptor — Neptune for a live SPARQL
+    endpoint, or a supplied RDF file for an ontology-first build.
     """
     if client is None:
-        from .ontology import NeptuneOntologyClient
+        from .ontology import make_ontology_client
 
-        client = NeptuneOntologyClient(source)
+        client = make_ontology_client(source)
     return {
         "classes": client.list_classes(),
         "properties": client.list_properties(),

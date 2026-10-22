@@ -189,12 +189,15 @@ descriptor-driven and imports its SDK lazily — **never called in tests**.
 
 | Capability | Offline (in this repo, tested) | Production integration (NOT in tests) |
 |---|---|---|
-| Discovery + profiling | `InMemoryDataAdapter` (fixtures) | real UC/warehouse `DataAdapter` |
-| Masked bounded profiles | ✅ `discovery.ColumnProfile` (cap + mask) | same contract over live samples |
-| Mapping proposals | ✅ `propose_mappings` (name sim + type + keys) | + LLM-assisted evidence (pluggable) |
+| Ontology ingest (supplied file) | ✅ `RdfFileOntologyClient` (Turtle/RDF-XML/N-Triples/JSON-LD) | `NeptuneOntologyClient` (live SPARQL); `rdfox` still config-only |
+| Discovery + profiling | `InMemoryDataAdapter` (fixtures) | ✅ `UnityCatalogDataAdapter` — reads DECLARED PK/FK from `information_schema` |
+| Masked bounded profiles | ✅ `discovery.ColumnProfile` (cap + mask) | same contract over live samples (`profile=True`) |
+| Mapping proposals | ✅ `propose_mappings` (name sim + type + keys + ontology `rdfs:domain`) | + LLM-assisted evidence (pluggable) |
 | Approval / publish gate | ✅ mandatory reviewer/note; undecided blocks; rejected excludes | DynamoDB AgentControl store implemented; Databricks build callback remains |
-| R2RML artifact | ✅ `to_r2rml` (dict form + provenance) | emit turtle / load into a mapper |
-| Semantic plan + compile | ✅ `SemanticPlanner` + `SqlCompiler` | execute on Databricks SQL |
+| Threshold auto-approval | ✅ `auto_approve` — measured evidence only, `auto:` provenance | same policy, tunable per source |
+| R2RML artifact | ✅ `to_r2rml` (dict form + provenance) | consumed by `materialize_to_nquads` |
+| **Graph materialisation** | ✅ `materialize_to_nquads` — N-Quads, one named graph per build | S3 + Neptune bulk loader (`format: nquads`) |
+| Semantic plan + compile | ✅ `SemanticPlanner` + `SqlCompiler` | execute on Databricks SQL — NOTE: `planner._quote_ident` emits double-quoted identifiers, which Databricks parses as string literals (see `materialize.SqlDialect`) |
 | Query execution | ✅ `InMemoryDataAdapter.execute` (safe subset) | Spark / JDBC execution |
 | Retrieval | ✅ `InMemoryRetriever` (lexical) | `DatabricksVectorRetriever` (lazy SDK) |
 | Federation / dedupe / RRF | ✅ pure helpers | same helpers over live retrievers |

@@ -11,6 +11,12 @@ a review pipeline that is honest about uncertainty:
                         Fetched ontology relationships yield relationship/join
                         proposals. No universal-join-key assumption.
     approve / reject  — explicit, human-gated status transitions.
+    auto_approve      — threshold policy that clears only proposals backed by
+                        MEASURED evidence (declared keys, matching datatypes,
+                        exact name matches), going through the same
+                        fail-closed `approve()`. Machine decisions are stamped
+                        `auto:` so they stay distinguishable from human ones;
+                        anything it defers still blocks strict publication.
     publish_mappings  — compile ONLY approved + valid proposals into a
                         PublishedMappingSet (runtime registry) and an
                         R2RML-compatible artifact with provenance. Unapproved or
@@ -206,10 +212,17 @@ _RANGE_TYPE = {
 
 
 def _range_logical_type(rng: Optional[str]) -> LogicalType:
+    """Map an ontology range onto a logical type by substring match.
+
+    Longest key first, which is not cosmetic: `xsd:dateTime` contains "date",
+    so shortest-first would type it DATE, disagree with a TIMESTAMP column, and
+    raise a type-mismatch ERROR that blocks a perfectly good mapping. Same for
+    "integer" versus "int".
+    """
     if not rng:
         return LogicalType.UNKNOWN
     r = rng.lower()
-    for key, lt in _RANGE_TYPE.items():
+    for key, lt in sorted(_RANGE_TYPE.items(), key=lambda kv: -len(kv[0])):
         if key in r:
             return lt
     return LogicalType.UNKNOWN
@@ -266,6 +279,14 @@ def propose_mappings(
             evidence = [Evidence("name-similarity",
                                  f"class '{label}' ~ table '{t.name}' (jaccard={sim:.2f})",
                                  weight=conf)]
+            if sim >= 1.0:
+                # An exact token match is qualitatively different from a partial
+                # one: it is the difference between "Supplier -> suppliers" and
+                # "Supplier -> supplier_contacts". The policy needs to see it.
+                evidence.append(Evidence(
+                    "name-exact",
+                    f"class '{label}' token-matches table '{t.name}' exactly",
+                    weight=0.0))
             if subject_cols:
                 evidence.append(Evidence(
                     "key-metadata",
@@ -293,6 +314,11 @@ def propose_mappings(
         local = _local_name(uri)
         label = p.get("label") or local
         want_lt = _range_logical_type(p.get("range"))
+        # The ontology's rdfs:domain says WHICH class this property belongs to.
+        # Using it to constrain candidate tables is the difference between the
+        # ontology driving the mapping and the ontology merely decorating it.
+        domain_uri = p.get("domain")
+        domain_table, _domain_sim = _match_table_scored(discovery, domain_uri)
         for t in discovery.tables:
             for col in t.columns:
                 sim = max(name_similarity(label, col.name), name_similarity(local, col.name))
@@ -302,6 +328,28 @@ def propose_mappings(
                                      f"property '{label}' ~ column '{t.name}.{col.name}' "
                                      f"(jaccard={sim:.2f})", weight=min(sim, NAME_SIMILARITY_MAX_CONFIDENCE))]
                 conf = min(sim, NAME_SIMILARITY_MAX_CONFIDENCE)
+                if sim >= 1.0:
+                    evidence.append(Evidence(
+                        "name-exact",
+                        f"property '{label}' token-matches column "
+                        f"'{t.name}.{col.name}' exactly",
+                        weight=0.0))
+                domain_issue: Optional[ValidationIssue] = None
+                if domain_table is not None:
+                    if domain_table.name == t.name:
+                        evidence.append(Evidence(
+                            "domain-consistent",
+                            f"ontology domain {_local_name(domain_uri or '')} resolves to "
+                            f"table '{t.name}', which is where this column lives",
+                            weight=0.15))
+                    else:
+                        # Not an error: domain resolution is itself name-based,
+                        # so it may be wrong. But it must stop automation.
+                        domain_issue = ValidationIssue(
+                            "domain-mismatch",
+                            f"ontology domain {_local_name(domain_uri or '')} resolves to "
+                            f"table '{domain_table.name}', not '{t.name}'",
+                            severity="warning")
                 type_ok = True
                 if want_lt != LogicalType.UNKNOWN and col.logical_type != LogicalType.UNKNOWN:
                     if want_lt == col.logical_type:
@@ -312,6 +360,8 @@ def propose_mappings(
                     else:
                         type_ok = False
                 issues = _name_only_issues(min(sim, NAME_SIMILARITY_MAX_CONFIDENCE))
+                if domain_issue is not None:
+                    issues.append(domain_issue)
                 if not type_ok:
                     issues.append(ValidationIssue(
                         "type-mismatch",
@@ -335,8 +385,8 @@ def propose_mappings(
         local = _local_name(uri)
         label = rel.get("label") or local
         domain, rng = rel.get("domain"), rel.get("range")
-        left = _match_table(discovery, domain)
-        right = _match_table(discovery, rng)
+        left, left_sim = _match_table_scored(discovery, domain)
+        right, right_sim = _match_table_scored(discovery, rng)
         if not left or not right:
             # Relationship references a class we couldn't resolve to a table:
             # still emit a proposal, but mark it blocking so it can't publish.
@@ -364,14 +414,24 @@ def propose_mappings(
                 severity="error"))
         else:
             conf = 0.6
+        rel_evidence = [Evidence("ontology-relationship",
+                                 f"relationship '{label}': {left.name} -> {right.name}", weight=0.4)]
+        if join:
+            rel_evidence.append(
+                Evidence("key-metadata", f"join via {join.left_columns}->{join.right_columns}", 0.2))
+        if left_sim >= 1.0 and right_sim >= 1.0:
+            # Both endpoints resolved to tables by an exact token match. The
+            # relationship itself comes from the ontology, but which TABLES it
+            # connects is a name decision — so its exactness is evidence too.
+            rel_evidence.append(Evidence(
+                "name-exact",
+                f"both endpoints token-match exactly: '{left.name}', '{right.name}'",
+                weight=0.0))
         proposals.append(MappingProposal(
             id=next_id(), kind=ProposalKind.RELATIONSHIP,
             ontology_uri=uri, ontology_label=label, ontology_type="object-property",
             target_table=right.name, join=join,
-            evidence=[Evidence("ontology-relationship",
-                               f"relationship '{label}': {left.name} -> {right.name}", weight=0.4)]
-                     + ([Evidence("key-metadata", f"join via {join.left_columns}->{join.right_columns}", 0.2)]
-                        if join else []),
+            evidence=rel_evidence,
             confidence=conf, validation_issues=issues, source_fingerprint=src_fp,
         ))
 
@@ -390,16 +450,26 @@ def _name_only_issues(conf: float) -> list[ValidationIssue]:
     return []
 
 
-def _match_table(discovery: DiscoveryResult, class_uri: Optional[str]):
+def _match_table_scored(discovery: DiscoveryResult, class_uri: Optional[str]):
+    """Best table for a class URI, WITH the similarity that justified it.
+
+    The score is what lets the auto-approval policy distinguish an exact name
+    match from a fuzzy guess; collapsing it to just the table (as `_match_table`
+    does) throws away the only evidence of how good the match was.
+    """
     if not class_uri:
-        return None
+        return None, 0.0
     local = _local_name(class_uri)
     best, best_sim = None, 0.0
     for t in discovery.tables:
         sim = max(name_similarity(local, t.name), name_similarity(class_uri, t.name))
         if sim > best_sim:
             best, best_sim = t, sim
-    return best if best_sim > 0 else None
+    return (best, best_sim) if best_sim > 0 else (None, 0.0)
+
+
+def _match_table(discovery: DiscoveryResult, class_uri: Optional[str]):
+    return _match_table_scored(discovery, class_uri)[0]
 
 
 def _candidate_join(left, right, name) -> Optional[JoinMetadata]:
@@ -467,6 +537,177 @@ def reject(proposal: MappingProposal, approver: str, notes: Optional[str] = None
     proposal.decided_at = _now()
     proposal.notes = notes
     return proposal
+
+
+# --------------------------------------------------------------------------- #
+# Threshold auto-approval
+# --------------------------------------------------------------------------- #
+# A build can only be "automatic irrespective of the dataset" if something other
+# than a human can clear the gate. The rule is that AUTOMATION FOLLOWS EVIDENCE:
+# a proposal may auto-approve only when the thing being asserted was *measured*
+# (a declared key, a matching datatype, an exact name match) rather than guessed
+# from name resemblance.
+#
+# INVARIANT: AUTO_APPROVE_MIN_CONFIDENCE > NAME_SIMILARITY_MAX_CONFIDENCE. A
+# name-only proposal is capped below the bar, so it cannot auto-approve by
+# arithmetic, not merely by policy. (Asserted in the test suite.)
+AUTO_APPROVE_MIN_CONFIDENCE = 0.55
+
+# Evidence kinds that record a measurement rather than a resemblance.
+HARD_EVIDENCE_KINDS = frozenset({"key-metadata", "type-compatibility"})
+
+# Marks machine decisions in the audit trail so they can never be mistaken for,
+# or counted as, human review.
+AUTO_APPROVER_PREFIX = "auto:"
+
+
+@dataclass(frozen=True)
+class AutoApprovalPolicy:
+    """What the machine is allowed to approve on its own.
+
+    `require_exact_name_match` is the load-bearing setting, and it applies to
+    every kind. Which column or table an ontology term resolves to is a name
+    decision even when the term itself is authoritative, so without this a
+    partial match could publish unreviewed — and partial matches are not rare
+    edge cases. `siteName` overlaps `site_id` on one of two tokens, and both
+    being strings makes their types "compatible", so name+type alone would
+    happily auto-approve a mapping of the site's NAME onto its ID.
+    """
+
+    min_confidence: float = AUTO_APPROVE_MIN_CONFIDENCE
+    require_exact_name_match: bool = True
+    actor: str = "threshold-policy"
+
+    @property
+    def approver(self) -> str:
+        return f"{AUTO_APPROVER_PREFIX}{self.actor}"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "min_confidence": self.min_confidence,
+            "require_exact_name_match": self.require_exact_name_match,
+            "approver": self.approver,
+        }
+
+
+def auto_approval_verdict(
+    proposal: MappingProposal, policy: Optional[AutoApprovalPolicy] = None
+) -> tuple[bool, str]:
+    """Decide whether one proposal may auto-approve. Returns (eligible, reason).
+
+    The reason is recorded either as the approval note (eligible) or as the
+    deferral reason (not eligible), so every proposal carries a written
+    justification regardless of which way it went.
+    """
+    pol = policy or AutoApprovalPolicy()
+    kinds = {e.kind for e in proposal.evidence}
+
+    if proposal.status != ProposalStatus.PROPOSED:
+        return False, f"already decided ({proposal.status.value})"
+    if proposal.has_blocking_issue:
+        codes = [i.code for i in proposal.validation_issues if i.severity == "error"]
+        return False, f"blocking validation issues {codes}"
+    if not kinds & HARD_EVIDENCE_KINDS:
+        return False, "no measured evidence; justified only by name resemblance"
+
+    exact = "name-exact" in kinds
+    if pol.require_exact_name_match and not exact:
+        return False, "name match is only partial, so the target rests on a guess"
+
+    # A declared domain that points somewhere else is the ontology itself
+    # disagreeing with the match. Never automate past that.
+    if any(i.code == "domain-mismatch" for i in proposal.validation_issues):
+        return False, "ontology domain disagrees with the matched table"
+
+    if proposal.kind == ProposalKind.DIRECT:
+        if "type-compatibility" not in kinds:
+            return False, "no type-compatibility evidence for a column mapping"
+        if proposal.confidence < pol.min_confidence:
+            return False, (
+                f"confidence {proposal.confidence:.2f} below "
+                f"{pol.min_confidence:.2f}"
+            )
+        domain = "domain-consistent" in kinds
+        return True, (
+            f"datatype property: exact column match, ontology range matches the "
+            f"discovered column type, "
+            f"{'domain confirmed' if domain else 'no domain declared'}, "
+            f"confidence {proposal.confidence:.2f}"
+        )
+
+    if proposal.kind == ProposalKind.CLASS:
+        if "key-metadata" not in kinds:
+            return False, "class has no discovered primary key for subject IRIs"
+        return True, (
+            f"class: exact table match plus discovered primary key "
+            f"{list(proposal.subject_columns)}"
+        )
+
+    if proposal.kind == ProposalKind.RELATIONSHIP:
+        if "key-metadata" not in kinds:
+            return False, "relationship has no discovered key to join on"
+        if proposal.confidence < pol.min_confidence:
+            return False, (
+                f"confidence {proposal.confidence:.2f} below "
+                f"{pol.min_confidence:.2f}"
+            )
+        return True, (
+            "relationship: ontology domain/range with a discovered foreign key "
+            "join and exact endpoint matches"
+        )
+
+    return False, f"unhandled proposal kind '{proposal.kind}'"
+
+
+@dataclass(frozen=True)
+class AutoApprovalResult:
+    """What the policy decided, in full, for the audit trail."""
+
+    approved: list[str] = field(default_factory=list)
+    deferred: list[dict[str, str]] = field(default_factory=list)
+    policy: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def needs_human(self) -> bool:
+        return bool(self.deferred)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "approved": list(self.approved),
+            "deferred": list(self.deferred),
+            "policy": dict(self.policy),
+            "needs_human": self.needs_human,
+        }
+
+
+def auto_approve(
+    proposals: list[MappingProposal],
+    *,
+    policy: Optional[AutoApprovalPolicy] = None,
+) -> AutoApprovalResult:
+    """Approve every proposal the policy allows; leave the rest for a human.
+
+    Approval goes through `approve()` rather than setting status directly, so
+    the fail-closed checks apply identically to machine and human decisions.
+    Anything not approved is left PROPOSED — which means strict publication will
+    still refuse the batch until a human decides it. Automation shortens the
+    queue; it never empties it on your behalf.
+    """
+    pol = policy or AutoApprovalPolicy()
+    result = AutoApprovalResult(approved=[], deferred=[], policy=pol.to_dict())
+    for p in proposals:
+        eligible, reason = auto_approval_verdict(p, pol)
+        if eligible:
+            approve(p, pol.approver, f"auto-approved: {reason}")
+            result.approved.append(p.id)
+        else:
+            result.deferred.append({"id": p.id, "reason": reason})
+    return result
+
+
+def was_auto_approved(proposal: MappingProposal) -> bool:
+    """True when this decision was made by policy rather than by a person."""
+    return bool(proposal.approver and proposal.approver.startswith(AUTO_APPROVER_PREFIX))
 
 
 # --------------------------------------------------------------------------- #

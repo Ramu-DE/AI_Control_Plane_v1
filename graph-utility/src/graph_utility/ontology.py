@@ -110,3 +110,34 @@ class NeptuneOntologyClient:
     def triple_count(self) -> int:
         r = self.select(f"SELECT (COUNT(*) AS ?c) FROM <{self.graph_uri}> WHERE {{ ?s ?p ?o }}")
         return int(r[0]["c"]) if r else 0
+
+
+def make_ontology_client(source: GraphSource):
+    """Select the ontology adapter the descriptor asks for.
+
+    The build plane calls this instead of constructing a client directly, so an
+    `rdf-file` source no longer fails with a confusing Neptune error. Each
+    unsupported type raises a message that says what to do about it rather than
+    what went wrong internally.
+    """
+    ont_type = source.ontology.type
+    if ont_type == "neptune":
+        return NeptuneOntologyClient(source)
+    if ont_type == "rdf-file":
+        from .ontology_file import RdfFileOntologyClient
+
+        return RdfFileOntologyClient(source)
+    if ont_type == "rdfox":
+        raise NotImplementedError(
+            "ontology.type 'rdfox' is a configuration seam only: there is no "
+            "RDFox client in this module yet (see docs/RDFOX_assessment.md). "
+            "Use 'rdf-file' with an ontology that already has its entailments "
+            "materialised, or 'neptune'."
+        )
+    if ont_type == "none":
+        raise ValueError(
+            "ontology.type 'none' means the backend graph IS the ontology, so "
+            "there is no schema to read here; this source cannot drive an "
+            "ontology-first build."
+        )
+    raise ValueError(f"unsupported ontology.type '{ont_type}'")

@@ -45,6 +45,13 @@ class OntologySource:
     auth: str = "sigv4-assume-role"        # "sigv4-assume-role" | "none" | "api-key-ref"
     role_arn: Optional[str] = None
     region: str = "us-east-1"
+    # --- rdf-file only ------------------------------------------------------
+    # Path to a local RDF document (Turtle/N-Triples/N-Quads/RDF-XML/JSON-LD).
+    # Chosen when the ontology is SUPPLIED rather than queried: no VPC, no
+    # endpoint, and the same file can be diffed and version-controlled.
+    file_path: Optional[str] = None
+    # Serialization hint. None = infer from the file extension.
+    file_format: Optional[str] = None
     # --- RDFox only ---------------------------------------------------------
     # Base URL of the RDFox endpoint, e.g. https://rdfox.internal:12110
     rdfox_url: Optional[str] = None
@@ -165,7 +172,14 @@ class GraphSource:
                 errs.append("ontology.rdfox_datastore is required for type 'rdfox'")
             if not self.ontology.namespace:
                 errs.append("ontology.namespace is required for type 'rdfox'")
-        elif self.ontology.type not in ("rdf-file", "none"):
+        elif self.ontology.type == "rdf-file":
+            # A supplied ontology needs a path and a namespace; without the
+            # namespace we cannot tell this source's terms from imported ones.
+            if not self.ontology.file_path:
+                errs.append("ontology.file_path is required for type 'rdf-file'")
+            if not self.ontology.namespace:
+                errs.append("ontology.namespace is required for type 'rdf-file'")
+        elif self.ontology.type != "none":
             errs.append(f"unsupported ontology.type '{self.ontology.type}'")
 
         # Backend

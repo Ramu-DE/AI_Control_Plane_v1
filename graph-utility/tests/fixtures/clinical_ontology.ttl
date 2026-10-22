@@ -1,0 +1,110 @@
+# Clinical-trials ontology, as a SUPPLIED artifact.
+#
+# This is the ontology-first input: the build plane is handed this file and must
+# produce a knowledge graph over whatever dataset it is pointed at. Nothing here
+# mentions a table, a column, or a warehouse.
+#
+# It deliberately contains awkward cases the reader must handle honestly:
+#   - an rdfs:Class alongside the owl:Class declarations
+#   - a term from a meta vocabulary (foaf), which must be ignored
+#   - an owl:unionOf domain, which cannot be resolved without reasoning
+#   - a plain rdf:Property, which must be classified by its range
+#   - an xsd:dateTime range, which must not be mistaken for xsd:date
+
+@prefix ct:   <http://example.org/ontology/ct#> .
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+@prefix foaf: <http://xmlns.com/foaf/0.1/> .
+
+# --- classes --------------------------------------------------------------- #
+ct:Trial a owl:Class ;
+    rdfs:label "Trial" ;
+    rdfs:comment "An interventional clinical study." .
+
+ct:Investigator a owl:Class ;
+    rdfs:label "Investigator" .
+
+ct:Site a owl:Class ;
+    rdfs:label "Site" .
+
+ct:TrialSite a owl:Class ;
+    rdfs:label "Trial Site" ;
+    rdfs:comment "A trial as conducted at one site." .
+
+# Plain RDFS class: valid, and has no counterpart in the dataset.
+ct:Sponsor a rdfs:Class ;
+    rdfs:label "Sponsor" .
+
+# Meta vocabulary. Must never become a mapping candidate.
+foaf:Person a owl:Class ;
+    rdfs:label "Person" .
+
+# --- datatype properties --------------------------------------------------- #
+ct:trialTitle a owl:DatatypeProperty ;
+    rdfs:label "Trial Title" ;
+    rdfs:domain ct:Trial ;
+    rdfs:range xsd:string .
+
+ct:phase a owl:DatatypeProperty ;
+    rdfs:label "Phase" ;
+    rdfs:domain ct:Trial ;
+    rdfs:range xsd:string .
+
+ct:enrollmentTarget a owl:DatatypeProperty ;
+    rdfs:label "Enrollment Target" ;
+    rdfs:domain ct:Trial ;
+    rdfs:range xsd:integer .
+
+ct:investigatorName a owl:DatatypeProperty ;
+    rdfs:label "Investigator Name" ;
+    rdfs:domain ct:Investigator ;
+    rdfs:range xsd:string .
+
+ct:specialty a owl:DatatypeProperty ;
+    rdfs:label "Specialty" ;
+    rdfs:domain ct:Investigator ;
+    rdfs:range xsd:string .
+
+ct:siteName a owl:DatatypeProperty ;
+    rdfs:label "Site Name" ;
+    rdfs:domain ct:Site ;
+    rdfs:range xsd:string .
+
+ct:country a owl:DatatypeProperty ;
+    rdfs:label "Country" ;
+    rdfs:domain ct:Site ;
+    rdfs:range xsd:string .
+
+ct:enrolledCount a owl:DatatypeProperty ;
+    rdfs:label "Enrolled Count" ;
+    rdfs:domain ct:TrialSite ;
+    rdfs:range xsd:integer .
+
+# --- object properties ----------------------------------------------------- #
+ct:forTrial a owl:ObjectProperty ;
+    rdfs:label "Trial" ;
+    rdfs:domain ct:TrialSite ;
+    rdfs:range ct:Trial .
+
+ct:atSite a owl:ObjectProperty ;
+    rdfs:label "Site" ;
+    rdfs:domain ct:TrialSite ;
+    rdfs:range ct:Site .
+
+ct:ledBy a owl:ObjectProperty ;
+    rdfs:label "Investigator" ;
+    rdfs:domain ct:TrialSite ;
+    rdfs:range ct:Investigator .
+
+# Union domain: resolving this needs reasoning, which this reader does not do.
+ct:spansRegion a owl:ObjectProperty ;
+    rdfs:label "Spans Region" ;
+    rdfs:domain [ owl:unionOf ( ct:Trial ct:Site ) ] ;
+    rdfs:range ct:Site .
+
+# --- plain RDF property, classified by its range --------------------------- #
+ct:recordedAt a rdf:Property ;
+    rdfs:label "Recorded At" ;
+    rdfs:range xsd:dateTime .

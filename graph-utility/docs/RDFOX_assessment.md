@@ -15,8 +15,15 @@ graph-utility's precision path already does the hard, careful part:
 discover → propose → human approve → publish → to_r2rml()
 ```
 
+> **Status update (2026-10-22).** The gap described below — "nothing consumes the
+> mapping artifact" — has since been closed by `materialize.py`, which turns a
+> published mapping set into N-Quads, one named graph per build. The chain now
+> runs end to end and has been executed against live Unity Catalog. What RDFox
+> would still add is **reasoning and incremental materialisation**, not basic
+> graph construction. Read section 1 as history; sections 2 onward still stand.
+
 `to_r2rml()` emits a content-addressed, provenance-carrying mapping artifact. And then
-**nothing consumes it.** Verified:
+**nothing consumes it.** Verified at the time of writing:
 
 ```
 $ grep -rn "to_r2rml" --include=*.py --include=*.ts .
@@ -25,8 +32,10 @@ $ grep -rn "to_r2rml" --include=*.py --include=*.ts .
   tests/test_precision_offline.py    (tests only)
 ```
 
-There is no engine in either track that turns an approved mapping into an actual knowledge
-graph. RDFox is exactly that engine.
+There was no engine in either track that turned an approved mapping into an actual
+knowledge graph. `materialize_to_nquads` is now that engine for batch construction;
+RDFox remains the candidate for the reasoning layer above it, since Neptune has no
+OWL reasoner and entailments must otherwise be materialised before ingest.
 
 ## 2. Why RDFox rather than the graph engines already in play
 
