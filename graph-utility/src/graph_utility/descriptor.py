@@ -108,6 +108,19 @@ class GraphSource:
     backend: BackendSource
     llm_endpoint: str                       # Foundation Model / serving endpoint
     query_engine_url: Optional[str] = None  # Databricks Model Serving invocations URL
+    # Where a materialized graph LANDS: "neptune" | "neo4j" | "ontobricks".
+    #
+    # Optional, and None means "emit N-Quads and let an operator load them",
+    # which is what every existing descriptor relied on — so this cannot be
+    # required without invalidating them.
+    #
+    # It is declared rather than inferred because the targets are not
+    # interchangeable, and the differences bite at BUILD time, not at load
+    # time: only Neptune has named graphs (so only Neptune can scope and drop
+    # one build), and only Neptune serves full SPARQL. See
+    # `ontobricks.TARGETS` for the capability matrix the build plane checks
+    # against before it starts.
+    graph_target: Optional[str] = None
     description: str = ""
     # Free-form tags for governance/routing (region, sensitivity, tier, ...)
     tags: dict[str, str] = field(default_factory=dict)
@@ -134,6 +147,7 @@ class GraphSource:
             backend=BackendSource(**bk),
             llm_endpoint=d["llm_endpoint"],
             query_engine_url=d.get("query_engine_url"),
+            graph_target=d.get("graph_target"),
             description=d.get("description", ""),
             tags=d.get("tags", {}) or {},
             version=d.get("version", "1.0.0"),
@@ -155,6 +169,19 @@ class GraphSource:
             errs.append("bu is required")
         if not self.llm_endpoint:
             errs.append("llm_endpoint is required")
+
+        # Graph target. Imported lazily so descriptor.py keeps importing
+        # cleanly on its own — `ontobricks` pulls in the mapping module, and a
+        # descriptor must stay loadable in tooling that has no use for it.
+        if self.graph_target is not None:
+            from .ontobricks import TARGETS
+
+            if self.graph_target not in TARGETS:
+                errs.append(
+                    f"unsupported graph_target '{self.graph_target}'; "
+                    f"expected one of {sorted(TARGETS)} (or omit it to emit "
+                    f"N-Quads for manual loading)"
+                )
 
         # Ontology
         if self.ontology.type == "neptune":

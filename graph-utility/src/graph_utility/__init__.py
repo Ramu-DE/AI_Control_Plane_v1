@@ -175,6 +175,27 @@ from .pipeline import (
     run,
 )
 
+# Graph targets (Neptune / Neo4j / OntoBricks) + the R2RML Turtle handoff, and
+# the two-arm mapping comparison that justifies the measured path.
+from .ontobricks import (
+    GraphTargetCapabilities,
+    NEO4J,
+    NEPTUNE,
+    ONTOBRICKS,
+    R2RMLDocument,
+    TARGETS,
+    target_capabilities,
+    to_r2rml_turtle,
+)
+from .compare import (
+    ARM_MEASURED,
+    ARM_METADATA,
+    ArmResult,
+    Comparison,
+    compare,
+    score_arm,
+)
+
 __all__ = [
     # legacy
     "GraphSource", "OntologySource", "BackendSource", "GraphSourceRegistry",
@@ -196,6 +217,12 @@ __all__ = [
     "MappingProposal", "ProposalStatus", "ProposalKind", "Evidence",
     "ValidationIssue", "PublishedMapping", "PublishedMappingSet",
     "propose_mappings", "approve", "reject", "publish_mappings", "to_r2rml",
+    # graph targets + R2RML handoff
+    "GraphTargetCapabilities", "TARGETS", "target_capabilities",
+    "ONTOBRICKS", "NEPTUNE", "NEO4J", "to_r2rml_turtle", "R2RMLDocument",
+    # mapping-method comparison
+    "compare", "Comparison", "ArmResult", "score_arm",
+    "ARM_METADATA", "ARM_MEASURED",
     "name_similarity", "discovery_fingerprint", "UnapprovedPublishError",
     "R2RMLError",
     # threshold auto-approval

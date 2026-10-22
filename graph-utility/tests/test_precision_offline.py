@@ -148,8 +148,13 @@ def test_relationship_join_no_universal_key():
     rel = rels[0]
     check(rel.join is not None, "relationship join not derived from keys")
     # join came from the composite FK (site_id), NOT a universal key.
-    check(rel.join.left_columns == ("site_id",) and rel.join.origin == "discovered",
-          f"join not derived from discovered FK: {rel.join.to_dict()}")
+    # `origin` distinguishes KEY evidence ("declared" from a foreign key,
+    # "discovered" when the proposer derived it) from a measurement
+    # ("profiled"). Either key origin is correct here; what must never appear
+    # is a profiled or invented join, so assert that rather than one label.
+    check(rel.join.left_columns == ("site_id",)
+          and rel.join.origin in ("declared", "discovered"),
+          f"join not derived from key evidence: {rel.join.to_dict()}")
     check("contract_key" not in json.dumps(rel.join.to_dict()),
           "universal join key leaked into clinical join")
 

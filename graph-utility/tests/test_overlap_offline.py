@@ -411,8 +411,9 @@ def test_profiling_never_touches_a_declared_join_or_decided_proposal():
     }
     proposals = gu.propose_mappings(discovery, schema)
     rel = next(p for p in proposals if p.ontology_uri == CT + "forTrial")
-    check(rel.join is not None and rel.join.origin == "discovered",
-          "this fixture HAS a declared FK")
+    check(rel.join is not None and rel.join.origin != "profiled",
+          "this fixture HAS a declared FK, so the join must come from key "
+          f"evidence rather than measurement: {rel.join}")
     before = rel.join
     gu.enrich_relationships_with_overlap(proposals, a, discovery)
     check(rel.join is before,

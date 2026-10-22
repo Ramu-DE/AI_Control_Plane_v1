@@ -410,7 +410,7 @@ def propose_mappings(
                 source_fingerprint=src_fp,
             ))
             continue
-        join = _candidate_join(left, right, label)
+        join = _candidate_join(left, right, label, discovery.joins)
         issues: list[ValidationIssue] = []
         conf = 0.4
         if join is None:
@@ -479,10 +479,41 @@ def _match_table(discovery: DiscoveryResult, class_uri: Optional[str]):
     return _match_table_scored(discovery, class_uri)[0]
 
 
-def _candidate_join(left, right, name) -> Optional[JoinMetadata]:
-    """Derive a join from DISCOVERED keys only (FK on either side). Returns None
-    when there is no key evidence — the proposer never invents a join key."""
+def _candidate_join(left, right, name, declared=()) -> Optional[JoinMetadata]:
+    """Derive a join from DECLARED evidence only. Returns None when there is no
+    key evidence — the proposer never invents a join key.
+
+    `declared` is `DiscoveryResult.joins`, and it is consulted FIRST because it
+    is the most direct statement available: the adapter saying "these two
+    tables join on these columns".
+
+    It has to be consulted at all because the same fact has two
+    representations. The Unity Catalog adapter fills both — a `FOREIGN`
+    KeyMetadata on the table AND a JoinMetadata in `joins` — so reading only
+    the keys happened to work there. Any other adapter that populates only
+    `joins`, which the DataAdapter contract allows, had its declared foreign
+    keys silently ignored: the relationship was blocked with `no-key-evidence`
+    and the join could then only be recovered by profiling the data, paying a
+    query to rediscover what the catalog had already said.
+    """
     from .discovery import KeyType
+
+    for j in declared or ():
+        if j.left_table == left.name and j.right_table == right.name:
+            return JoinMetadata(
+                left_table=j.left_table, left_columns=j.left_columns,
+                right_table=j.right_table, right_columns=j.right_columns,
+                cardinality=j.cardinality, origin=j.origin, name=j.name or name)
+        # The same declared join seen from the other side. Columns must be
+        # swapped with it, or the join would read backwards.
+        if j.left_table == right.name and j.right_table == left.name:
+            return JoinMetadata(
+                left_table=left.name, left_columns=j.right_columns,
+                right_table=right.name, right_columns=j.left_columns,
+                cardinality="one-to-many" if j.cardinality == "many-to-one"
+                else j.cardinality,
+                origin=j.origin, name=j.name or name)
+
     # FK from left -> right
     for k in left.keys:
         if k.key_type == KeyType.FOREIGN and k.references_table == right.name:

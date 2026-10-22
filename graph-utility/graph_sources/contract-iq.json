@@ -21,6 +21,7 @@
     "vector_index": "usdev_corp.corp_us_mart.dbx_cc_sow_contract_chunk_index",
     "vector_endpoint": "vector_demo_new"
   },
+  "graph_target": "neptune",
   "llm_endpoint": "databricks-meta-llama-3-3-70b-instruct",
   "query_engine_url": "https://REPLACE-ME-databricks-host/serving-endpoints/contract_iq_omda/invocations",
   "tags": {
