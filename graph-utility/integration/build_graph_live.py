@@ -178,7 +178,8 @@ def main() -> int:
         axioms = client.list_axioms()
         declared = sum(len(v) for v in axioms.values())
         inferred, entail_report = gu.entail(triples, axioms)
-        print(f"\nREASONING   : {declared} axiom(s) read; "
+        print(f"\nREASONING   : {declared} axiom(s) "
+              f"(fingerprint {gu.axioms_fingerprint(axioms)}); "
               f"{entail_report.inferred} triple(s) inferred "
               f"in {entail_report.iterations} pass(es)")
         for rule, n in sorted(entail_report.by_rule.items()):
@@ -204,6 +205,7 @@ def main() -> int:
     extra = {}
     if entail_report:
         extra = {
+            "axiomsFingerprint": gu.axioms_fingerprint(axioms),
             "inferredGraph": f"{result.graph_uri}:inferred",
             "inferredCount": str(entail_report.inferred),
             "entailmentComplete": str(entail_report.complete).lower(),

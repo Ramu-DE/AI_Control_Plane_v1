@@ -127,6 +127,7 @@ from .reason import (
     EntailmentReport,
     Violation,
     entail,
+    axioms_fingerprint,
     prepare_tbox,
     validate_constraints,
     RDF_TYPE,
@@ -219,7 +220,7 @@ __all__ = [
     "SUBJECT_KEY_EVIDENCE",
     # reasoning + constraint validation
     "EntailmentReport", "Violation", "entail", "prepare_tbox",
-    "validate_constraints", "RDF_TYPE",
+    "validate_constraints", "RDF_TYPE", "axioms_fingerprint",
     "DEFAULT_MAX_ITERATIONS", "DEFAULT_MAX_INFERRED",
     # planner
     "Projection", "Filter", "Aggregation", "JoinPath", "SemanticQueryPlan",

@@ -229,10 +229,21 @@ still probed.
 
 ## Known limits
 
-- **Reasoning is batch-only.** Re-publishing re-derives the whole closure.
-  Incremental maintenance (RDFox's actual differentiator) is under design;
-  deletion is the hard half, since an inferred triple must survive if it still
-  has an independent derivation.
+- **Reasoning is batch, deliberately.** Incremental maintenance was researched
+  and rejected on measurement, not taste. A correct implementation needs an
+  algorithm sound under *cyclic* derivation — `prepare_tbox` folds
+  `equivalentClass` into mutual `subClassOf`, so reference counting is provably
+  wrong here — plus persisted state across what are separate job invocations.
+  Measured against this rule set, correct DRed gives ~1.2-1.5x at the median
+  re-publish delta (~8.6%, because withdrawing one mapping removes one triple
+  per row) and *loses* at 30%. Batch `entail` is now semi-naive instead:
+  ~1.1-1.2x on the non-recursive rules and ~3.3x on short transitive chains,
+  with provably identical output. Re-open this above ~1M asserted triples with
+  deltas under 10%, and prefer FBF with shallow backward chaining (what RDFox
+  actually ships) over DRed or counting.
+  Caveat: the semi-naive form is ~0.78x on a deep transitive chain (120 hops),
+  where both join directions must each scan the known edge set. SCC-condensing
+  transitive properties out of the fixpoint would fix that and is not done.
 - **The Neptune axiom reader is written but unverified.**
   `NeptuneOntologyClient.list_axioms()` issues two UNION queries plus a
   blank-node count, and `ontology.assemble_axioms` — the part that can diverge

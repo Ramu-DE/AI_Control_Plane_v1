@@ -40,11 +40,13 @@ stdlib only.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional
 
-from .materialize import RDF_NS, Triple, is_iri, obj_iri
+from .materialize import RDF_NS, ObjectTerm, Triple, is_iri, obj_iri
 
 RDF_TYPE = RDF_NS + "type"
 
@@ -153,17 +155,41 @@ def prepare_tbox(axioms: dict[str, Any]) -> dict[str, Any]:
     for p, c in axioms.get("range", []):
         range_[p].add(c)
 
+    # Collections are SORTED TUPLES, not sets. Rule application iterates them,
+    # so set order — which varies with the per-process string hash seed — would
+    # leak into the order facts are derived in. That is invisible for a complete
+    # closure (a set is a set) but decides WHICH facts you keep when a cap stops
+    # the fixpoint early, making a truncated result irreproducible.
     return {
-        "super_classes": _transitive_closure(sub_class),
-        "super_properties": _transitive_closure(sub_prop),
-        "inverse_of": dict(inverse),
-        "domain": dict(domain),
-        "range": dict(range_),
-        "transitive": set(axioms.get("transitive", [])),
-        "symmetric": set(axioms.get("symmetric", [])),
-        "functional": set(axioms.get("functional", [])),
+        "super_classes": {k: tuple(sorted(v))
+                          for k, v in _transitive_closure(sub_class).items()},
+        "super_properties": {k: tuple(sorted(v))
+                             for k, v in _transitive_closure(sub_prop).items()},
+        "inverse_of": {k: tuple(sorted(v)) for k, v in inverse.items()},
+        "domain": {k: tuple(sorted(v)) for k, v in domain.items()},
+        "range": {k: tuple(sorted(v)) for k, v in range_.items()},
+        "transitive": tuple(sorted(set(axioms.get("transitive", [])))),
+        "symmetric": tuple(sorted(set(axioms.get("symmetric", [])))),
+        "functional": tuple(sorted(set(axioms.get("functional", [])))),
         "disjoint_with": [tuple(p) for p in axioms.get("disjoint_with", [])],
     }
+
+
+def axioms_fingerprint(axioms: dict[str, Any]) -> str:
+    """Content hash of an axiom set, in the convention used for mappings.
+
+    A T-box edit is a change to the RULES, not the data: one new `subClassOf`
+    retypes every instance of every subclass at once. Recording which axiom set
+    entailed a graph is therefore as important as recording which mappings
+    produced it, and nothing did so before — an ontology could be edited and the
+    artifact would not show that anything had moved.
+    """
+    canonical = json.dumps(
+        {k: sorted(v) if isinstance(v, (list, tuple, set)) else v
+         for k, v in sorted(axioms.items())},
+        sort_keys=True, default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()[:16]
 
 
 # --------------------------------------------------------------------------- #
@@ -186,94 +212,160 @@ def entail(
     inferred: set[Triple] = set()
     report = EntailmentReport(max_iterations=max_iterations, max_inferred=max_inferred)
 
-    def known(t: Triple) -> bool:
-        return t in base or t in inferred
+    # SEMI-NAIVE EVALUATION. The previous implementation re-indexed every known
+    # fact and re-applied every rule to all of them on every round, so a fact
+    # derived in round 1 was re-derived (and discarded as already-known) in
+    # rounds 2 and 3. Re-indexing alone measured as 58% of total time. Here each
+    # round applies rules only to the facts the PREVIOUS round produced — the
+    # standard requirement that at least one body atom match the delta — and the
+    # index is maintained incrementally. Output is unchanged: the closure of a
+    # monotone rule set is the same set either way.
+    known: set[Triple] = set(base)
+    by_pred: dict[str, set[tuple[str, ObjectTerm]]] = defaultdict(set)
+    types_of: dict[str, set[str]] = defaultdict(set)
 
-    def add(t: Triple, rule: str) -> bool:
-        if known(t):
-            return False
-        if len(inferred) >= max_inferred:
-            report.hit_inferred_cap = True
-            return False
-        inferred.add(t)
-        report.by_rule[rule] = report.by_rule.get(rule, 0) + 1
-        return True
+    # Only predicates some rule can read are worth indexing. On a real build
+    # most predicates are datatype properties no rule mentions.
+    live_predicates = (
+        set(tbox["domain"]) | set(tbox["range"]) | set(tbox["super_properties"])
+        | set(tbox["inverse_of"]) | set(tbox["symmetric"]) | set(tbox["transitive"])
+    )
+
+    def index(t: Triple) -> None:
+        s, p, o = t
+        if p == RDF_TYPE and is_iri(o):
+            types_of[s].add(o[1])
+        elif p in live_predicates:
+            by_pred[p].add((s, o))
+
+    for t in base:
+        index(t)
+
+    frontier: list[Triple] = sorted(base)
 
     for iteration in range(1, max_iterations + 1):
         report.iterations = iteration
-        added = 0
+        produced: list[tuple[Triple, str]] = []
+        emit = produced.append
 
-        # Re-index each round over asserted + inferred, so rules compose.
-        current = list(base) + list(inferred)
-        by_pred: dict[str, list[tuple[str, Any]]] = defaultdict(list)
-        types_of: dict[str, set[str]] = defaultdict(set)
-        for s, p, o in current:
-            if p == RDF_TYPE and is_iri(o):
-                types_of[s].add(o[1])
-            else:
-                by_pred[p].append((s, o))
+        # Index the DELTA by predicate, then drive the rules from the rule set
+        # rather than from the facts. Both halves matter: iterating the delta
+        # per fact would pay a dict lookup per rule on every fact, including
+        # the many datatype-property facts no rule can read, while iterating
+        # all known facts (the previous shape) re-derives what earlier rounds
+        # already produced.
+        delta_by_pred: dict[str, list[tuple[str, ObjectTerm]]] = defaultdict(list)
+        delta_types: list[tuple[str, str]] = []
+        for s, p, o in frontier:
+            if p == RDF_TYPE:
+                if is_iri(o):
+                    delta_types.append((s, o[1]))
+            elif p in live_predicates:
+                delta_by_pred[p].append((s, o))
+
+        # rdfs9 — subClassOf (pre-closed on the T-box, so a single step).
+        for s, cls in delta_types:
+            for d in tbox["super_classes"].get(cls, ()):
+                emit(((s, RDF_TYPE, obj_iri(d)), "rdfs9-subClassOf"))
 
         # rdfs2 — domain: a property's use types its SUBJECT.
         for p, classes in tbox["domain"].items():
-            for s, _o in by_pred.get(p, ()):
+            for s, _o in delta_by_pred.get(p, ()):
                 for c in classes:
-                    added += add((s, RDF_TYPE, obj_iri(c)), "rdfs2-domain")
+                    emit(((s, RDF_TYPE, obj_iri(c)), "rdfs2-domain"))
 
         # rdfs3 — range: types the OBJECT, but only when it is a resource.
         # A datatype property's range is an XSD type and its object is a
         # literal; literals cannot be subjects, so asserting that would be
         # malformed RDF. Skipped and counted rather than emitted.
         for p, classes in tbox["range"].items():
-            for _s, o in by_pred.get(p, ()):
+            for _s, o in delta_by_pred.get(p, ()):
                 if not is_iri(o):
                     report.skipped_literal_range += 1
                     continue
                 for c in classes:
-                    added += add((o[1], RDF_TYPE, obj_iri(c)), "rdfs3-range")
+                    emit(((o[1], RDF_TYPE, obj_iri(c)), "rdfs3-range"))
 
-        # rdfs7 — subPropertyOf (already transitively closed).
+        # rdfs7 — subPropertyOf (also pre-closed).
         for p, supers in tbox["super_properties"].items():
-            for s, o in by_pred.get(p, ()):
+            for s, o in delta_by_pred.get(p, ()):
                 for q in supers:
-                    added += add((s, q, o), "rdfs7-subPropertyOf")
-
-        # rdfs9 — subClassOf (already transitively closed).
-        for subject, classes in list(types_of.items()):
-            for c in list(classes):
-                for d in tbox["super_classes"].get(c, ()):
-                    added += add((subject, RDF_TYPE, obj_iri(d)), "rdfs9-subClassOf")
+                    emit(((s, q, o), "rdfs7-subPropertyOf"))
 
         # owl:inverseOf — the edge in the other direction.
         for p, inverses in tbox["inverse_of"].items():
-            for s, o in by_pred.get(p, ()):
-                if not is_iri(o):
-                    continue
-                for q in inverses:
-                    added += add((o[1], q, obj_iri(s)), "owl-inverseOf")
+            for s, o in delta_by_pred.get(p, ()):
+                if is_iri(o):
+                    for q in inverses:
+                        emit(((o[1], q, obj_iri(s)), "owl-inverseOf"))
 
         # owl:SymmetricProperty
         for p in tbox["symmetric"]:
+            for s, o in delta_by_pred.get(p, ()):
+                if is_iri(o):
+                    emit(((o[1], p, obj_iri(s)), "owl-symmetric"))
+
+        # owl:TransitiveProperty — the only genuinely recursive rule. Joined
+        # semi-naively (new ⋈ all, then all ⋈ new) instead of rebuilding the
+        # whole adjacency and taking one doubling step per round.
+        for p in tbox["transitive"]:
+            delta_edges = [(s, o[1]) for s, o in delta_by_pred.get(p, ())
+                           if is_iri(o)]
+            if not delta_edges:
+                continue
+            # BOTH directions are required. Dropping `all join delta` looks
+            # like a 2x win and silently under-derives — the randomised
+            # differential test against the naive closure catches it.
+            # Only ONE adjacency map is built over the (large) known edge set;
+            # the second join reads a map of the (small) delta instead, which
+            # is what the earlier two-map version paid for twice.
+            out_adj: dict[str, set[str]] = defaultdict(set)
             for s, o in by_pred.get(p, ()):
                 if is_iri(o):
-                    added += add((o[1], p, obj_iri(s)), "owl-symmetric")
+                    out_adj[s].add(o[1])
+            delta_out: dict[str, set[str]] = defaultdict(set)
+            for a, b in delta_edges:
+                delta_out[a].add(b)
+            # delta join all
+            for a, b in delta_edges:
+                for c in out_adj.get(b, ()):
+                    if c != a:
+                        emit(((a, p, obj_iri(c)), "owl-transitive"))
+            # all join delta
+            for x, ys in out_adj.items():
+                for y in ys:
+                    for c in delta_out.get(y, ()):
+                        if c != x:
+                            emit(((x, p, obj_iri(c)), "owl-transitive"))
 
-        # owl:TransitiveProperty
-        for p in tbox["transitive"]:
-            edges = [(s, o[1]) for s, o in by_pred.get(p, ()) if is_iri(o)]
-            out: dict[str, set[str]] = defaultdict(set)
-            for s, o in edges:
-                out[s].add(o)
-            for s, o in edges:
-                for o2 in out.get(o, ()):
-                    if o2 != s:
-                        added += add((s, p, obj_iri(o2)), "owl-transitive")
+        # Sorting is what makes a TRUNCATED closure reproducible: which facts
+        # survive the cap would otherwise depend on set iteration order, and so
+        # on the per-process string hash seed. It is only needed when the cap
+        # could actually bind — if everything derived this round is going to be
+        # kept, order cannot change the resulting set, and sorting a large
+        # candidate list is expensive enough to dominate the round.
+        if len(inferred) + len(produced) > max_inferred:
+            produced.sort()
+        next_frontier: list[Triple] = []
+        for t, rule in produced:
+            if t in known:
+                continue
+            if len(inferred) >= max_inferred:
+                report.hit_inferred_cap = True
+                break
+            inferred.add(t)
+            known.add(t)
+            index(t)
+            report.by_rule[rule] = report.by_rule.get(rule, 0) + 1
+            next_frontier.append(t)
 
         if report.hit_inferred_cap:
             break
-        if added == 0:
+        if not next_frontier:
             break   # fixpoint reached
+        frontier = next_frontier
     else:
-        # Loop ran to the cap without the else-skipping break: still changing.
+        # Ran to the iteration cap without reaching a fixpoint.
         report.hit_iteration_cap = True
 
     report.inferred = len(inferred)

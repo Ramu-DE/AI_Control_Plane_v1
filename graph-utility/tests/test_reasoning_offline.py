@@ -478,6 +478,158 @@ def test_inferred_triples_go_to_their_own_named_graph():
           "no line may appear in both graphs")
 
 
+# --------------------------------------------------------------------------- #
+# 6. Semi-naive evaluation vs a naive reference
+# --------------------------------------------------------------------------- #
+def _entail_naive(asserted, axioms, *, max_rounds=40):
+    """Deliberately stupid reference closure: re-apply EVERY rule to EVERY fact
+    until nothing changes.
+
+    `entail` is semi-naive — it applies rules only to the previous round's new
+    facts and maintains its index incrementally. That is a real optimisation
+    with a real failure mode: a missed frontier entry silently under-derives,
+    and no single hand-written assertion would notice. This slow, obviously
+    correct version is the oracle that would.
+    """
+    tbox = gu.prepare_tbox(axioms)
+    facts = set(asserted)
+    for _ in range(max_rounds):
+        new = set()
+        for s, p, o in facts:
+            if p == TYPE:
+                if gu.is_iri(o):
+                    for d in tbox["super_classes"].get(o[1], ()):
+                        new.add((s, TYPE, iri(d)))
+                continue
+            for c in tbox["domain"].get(p, ()):
+                new.add((s, TYPE, iri(c)))
+            if gu.is_iri(o):
+                for c in tbox["range"].get(p, ()):
+                    new.add((o[1], TYPE, iri(c)))
+            for q in tbox["super_properties"].get(p, ()):
+                new.add((s, q, o))
+            if gu.is_iri(o):
+                for q in tbox["inverse_of"].get(p, ()):
+                    new.add((o[1], q, iri(s)))
+                if p in tbox["symmetric"]:
+                    new.add((o[1], p, iri(s)))
+        for p in tbox["transitive"]:
+            edges = [(s, o[1]) for s, pp, o in facts if pp == p and gu.is_iri(o)]
+            adj = {}
+            for s, o in edges:
+                adj.setdefault(s, set()).add(o)
+            for a, b in edges:
+                for c in adj.get(b, ()):
+                    if c != a:
+                        new.add((a, p, iri(c)))
+        if new <= facts:
+            break
+        facts |= new
+    return facts - set(asserted)
+
+
+@test
+def test_semi_naive_entail_equals_a_naive_reference():
+    """Randomised differential test — the real guard on the optimisation.
+
+    Random axiom sets and random A-boxes, including cycles, self-loops,
+    literals and chains, compared against the naive closure. A fixed seed keeps
+    any failure reproducible.
+    """
+    import random
+    rng = random.Random(20261022)
+    names = [f"{CT}c{i}" for i in range(6)]
+    props = [f"{CT}p{i}" for i in range(4)]
+    ents = [f"{CT}e{i}" for i in range(7)]
+
+    for trial in range(300):
+        ax = {
+            "sub_class_of": [(rng.choice(names), rng.choice(names))
+                             for _ in range(rng.randint(0, 5))],
+            "sub_property_of": [(rng.choice(props), rng.choice(props))
+                                for _ in range(rng.randint(0, 3))],
+            "equivalent_class": [(rng.choice(names), rng.choice(names))
+                                 for _ in range(rng.randint(0, 2))],
+            "inverse_of": [(rng.choice(props), rng.choice(props))
+                           for _ in range(rng.randint(0, 2))],
+            "domain": [(rng.choice(props), rng.choice(names))
+                       for _ in range(rng.randint(0, 3))],
+            "range": [(rng.choice(props), rng.choice(names))
+                      for _ in range(rng.randint(0, 3))],
+            "transitive": rng.sample(props, rng.randint(0, 2)),
+            "symmetric": rng.sample(props, rng.randint(0, 1)),
+        }
+        facts = set()
+        for _ in range(rng.randint(1, 12)):
+            if rng.random() < 0.35:
+                facts.add((rng.choice(ents), TYPE, iri(rng.choice(names))))
+            elif rng.random() < 0.8:
+                facts.add((rng.choice(ents), rng.choice(props),
+                           iri(rng.choice(ents))))
+            else:
+                facts.add((rng.choice(ents), rng.choice(props),
+                           gu.obj_literal(f'"v{rng.randint(0, 3)}"')))
+
+        got, report = gu.entail(facts, ax, max_iterations=40, max_inferred=10 ** 6)
+        want = _entail_naive(facts, ax)
+        check(report.complete, f"trial {trial}: the oracle comparison needs a "
+                               f"complete closure")
+        check(got == want,
+              f"trial {trial}: semi-naive != naive; "
+              f"missing={sorted(want - got)[:2]} extra={sorted(got - want)[:2]}")
+
+
+@test
+def test_semi_naive_matches_naive_on_the_real_built_graph():
+    triples, _, ax = _built()
+    got, _ = gu.entail(triples, ax, max_iterations=40)
+    check(got == _entail_naive(triples, ax),
+          "the two must agree on a real build, not only on synthetic input")
+
+
+@test
+def test_a_truncated_closure_is_reproducible():
+    """A capped result must be the SAME capped result every time.
+
+    Rule application used to iterate sets, so which facts survived a cap
+    depended on the per-process string hash seed — three runs of identical
+    input gave three different artifacts. That is a reproducibility bug in a
+    module whose docs promise deterministic output, and it also makes a
+    truncated closure impossible to re-verify.
+    """
+    ax = {"transitive": [CT + "partOfRegion"]}
+    chain = {(f"{CT}n{i:03d}", CT + "partOfRegion", iri(f"{CT}n{i+1:03d}"))
+             for i in range(30)}
+    runs = [gu.entail(chain, ax, max_inferred=25) for _ in range(5)]
+    first = sorted(runs[0][0])
+    for got, report in runs:
+        check(report.hit_inferred_cap, "the fixture must really hit the cap")
+        check(not report.complete, "and must not claim completeness")
+        check(sorted(got) == first,
+              "a capped closure must be identical across runs, not a function "
+              "of set iteration order")
+
+
+@test
+def test_axioms_fingerprint_detects_a_tbox_change():
+    """A T-box edit is a RULE change: one subClassOf retypes every instance of
+    every subclass. The artifact must be able to say which axioms entailed it."""
+    a = {"sub_class_of": [(CT + "Trial", CT + "Study")]}
+    b = {"sub_class_of": [(CT + "Trial", CT + "Study"),
+                          (CT + "Study", CT + "Activity")]}
+    check(gu.axioms_fingerprint(a) != gu.axioms_fingerprint(b),
+          "adding an axiom must change the fingerprint")
+    check(gu.axioms_fingerprint(a) == gu.axioms_fingerprint(dict(a)),
+          "and it must be stable for equal axiom sets")
+    # Order of the pairs within a family must not matter.
+    c = {"sub_class_of": [(CT + "Study", CT + "Activity"),
+                          (CT + "Trial", CT + "Study")]}
+    check(gu.axioms_fingerprint(b) == gu.axioms_fingerprint(c),
+          "ordering within an axiom family is not a semantic difference")
+    check(len(gu.axioms_fingerprint(a)) == 16,
+          "and it matches the 16-char convention used for mappings")
+
+
 if __name__ == "__main__":
     print(f"\nALL REASONING OFFLINE TESTS PASSED "
           f"({PASSED} assertions, {TESTS} tests)")
