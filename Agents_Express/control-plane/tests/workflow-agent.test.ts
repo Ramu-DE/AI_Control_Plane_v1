@@ -27,6 +27,8 @@ import {
   agentEligibleForWorkflow,
   explainNoEligibleAgents,
 } from "../src/lib/workflow/eligibility.ts";
+// executorFor is already imported from resolve.ts, which re-exports it.
+import { modelsForRuntime, planeMismatch } from "../src/lib/plane.ts";
 import type {
   AgentConfig,
   CatalogModel,
@@ -421,4 +423,75 @@ test("an empty list explains itself, naming where the agents actually are", () =
 test("a cycle in the tenant tree terminates", () => {
   const cyclic = [{ id: "a", parentId: "b" }, { id: "b", parentId: "a" }];
   assert.equal(agentEligibleForWorkflow("z", "a", cyclic), false);
+});
+
+// --------------------------------------------------------------------------- //
+// Execution-plane agreement — one rule, stated over the plane not the provider
+// --------------------------------------------------------------------------- //
+// Reported: an agent created without complaint, then refused at workflow-bind
+// time with "declares model runtime 'databricks-…' but its model is served by
+// 'OpenAI'". The agents route had its own copy of the rule covering only
+// Bedrock and Databricks, so three of the five providers slipped through.
+
+test("a Databricks runtime requires a Databricks-served model", () => {
+  assert.equal(planeMismatch("databricks-fm-api-pay-per-token", "Databricks Model Serving"), null);
+  // These three were the hole: accepted at create, refused at bind.
+  for (const provider of ["OpenAI", "Anthropic", "AgentCore Gateway"] as const) {
+    const why = planeMismatch("databricks-fm-api-pay-per-token", provider);
+    assert.ok(why, `${provider} + a databricks runtime must be refused`);
+    assert.match(why!, /Databricks plane runtime/);
+    assert.match(why!, new RegExp(provider.replace(/[()/]/g, ".")));
+  }
+  assert.ok(planeMismatch("databricks-fm-api-pay-per-token", "Amazon Bedrock"));
+});
+
+test("a non-Databricks runtime requires a model served elsewhere", () => {
+  for (const provider of ["Amazon Bedrock", "OpenAI", "Anthropic", "AgentCore Gateway"] as const) {
+    assert.equal(planeMismatch("aws-bedrock", provider), null, `${provider} is fine on aws-*`);
+  }
+  const why = planeMismatch("aws-bedrock", "Databricks Model Serving");
+  assert.ok(why, "an aws runtime with a Databricks model must be refused");
+  assert.match(why!, /not a Databricks runtime/);
+});
+
+test("the rule is stated over the PLANE, so a new provider cannot open a hole", () => {
+  // executorFor collapses every provider to one of two planes, and the rule
+  // only ever compares planes. Adding a sixth provider therefore defaults to
+  // the bedrock plane rather than silently matching a databricks runtime.
+  assert.equal(executorFor({ inferenceProvider: "Databricks Model Serving" }), "databricks");
+  for (const p of ["Amazon Bedrock", "OpenAI", "Anthropic", "AgentCore Gateway"] as const) {
+    assert.equal(executorFor({ inferenceProvider: p }), "bedrock");
+  }
+  // An unseen provider must be REFUSED on a databricks runtime, exactly like
+  // any other non-Databricks one. The messages differ only by the provider
+  // name they quote, so compare the outcome and the reason, not the string.
+  const unknown = planeMismatch("databricks-x", "Totally New Provider" as never);
+  assert.ok(unknown, "an unknown provider must not pass on a databricks runtime");
+  assert.match(unknown!, /Databricks plane runtime/);
+  assert.ok(planeMismatch("databricks-x", "OpenAI"), "as OpenAI does not");
+  // And it is fine on a non-Databricks runtime, like every other bedrock-plane
+  // provider — defaulting to the safer plane rather than matching databricks.
+  assert.equal(planeMismatch("aws-bedrock", "Totally New Provider" as never), null);
+});
+
+test("modelsForRuntime narrows a picker to combinations that will be accepted", () => {
+  const models = [
+    { id: "m1", inferenceProvider: "Databricks Model Serving" as const },
+    { id: "m2", inferenceProvider: "Amazon Bedrock" as const },
+    { id: "m3", inferenceProvider: "OpenAI" as const },
+  ];
+  assert.deepEqual(
+    modelsForRuntime(models, "databricks-fm-api-pay-per-token").map((m) => m.id),
+    ["m1"]
+  );
+  assert.deepEqual(
+    modelsForRuntime(models, "aws-bedrock").map((m) => m.id),
+    ["m2", "m3"]
+  );
+  // Every offered combination must pass the rule — that is the whole point.
+  for (const rt of ["databricks-fm-api-pay-per-token", "aws-bedrock"]) {
+    for (const m of modelsForRuntime(models, rt)) {
+      assert.equal(planeMismatch(rt, m.inferenceProvider), null);
+    }
+  }
 });

@@ -12,7 +12,9 @@
 
 import { selectTools } from "../tools/registry";
 import { narrowTools } from "../tools/discover";
-import { agentEligibleForWorkflow, isAncestorTenant } from "./eligibility";
+import { agentEligibleForWorkflow } from "./eligibility";
+import { executorFor, planeMismatch } from "../plane";
+export { executorFor } from "../plane";
 import type { ToolSpec } from "../tools/registry";
 import type {
   AgentConfig,
@@ -33,11 +35,6 @@ export class StepResolutionError extends Error {
 /** Which execution plane a catalog model routes to. */
 export type Executor = "bedrock" | "databricks";
 
-export function executorFor(model: CatalogModel): Executor {
-  return model.inferenceProvider === "Databricks Model Serving"
-    ? "databricks"
-    : "bedrock";
-}
 
 export interface ResolvedStep {
   /** The step as the executor should see it: model + composed prompt. */
@@ -132,18 +129,12 @@ export function resolveStep(step: WorkflowStep, ctx: ResolveContext): ResolvedSt
   // If the agent declares a model runtime, it must agree with where the model
   // is really served — otherwise the runtime field would be decorative again.
   if (agent) {
-    const wantsDatabricks = agent.compute.modelRuntimeId.startsWith("databricks-");
-    if (wantsDatabricks && executor !== "databricks") {
-      throw new StepResolutionError(
-        `agent '${agent.name}' declares model runtime '${agent.compute.modelRuntimeId}' but its ` +
-          `model is served by '${catalogModel.inferenceProvider}'`
-      );
-    }
-    if (!wantsDatabricks && executor === "databricks") {
-      throw new StepResolutionError(
-        `agent '${agent.name}' declares model runtime '${agent.compute.modelRuntimeId}' but its ` +
-          `model is served by Databricks Model Serving`
-      );
+    const mismatch = planeMismatch(
+      agent.compute.modelRuntimeId,
+      catalogModel.inferenceProvider
+    );
+    if (mismatch) {
+      throw new StepResolutionError(`agent '${agent.name}': ${mismatch}`);
     }
   }
 
