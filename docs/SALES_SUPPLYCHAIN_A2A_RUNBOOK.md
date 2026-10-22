@@ -257,15 +257,78 @@ Cedar `runAgent` check needs a principal.
 different — one agent calls the other **directly**, mid-reasoning, because it
 has hit the edge of what it knows.
 
+### First: do you actually need this?
+
+Both agents in §4 live INSIDE this control plane, so they do not need A2A to
+collaborate — the workflow in §5 already passes each step's findings to the
+next. A2A is for calling an agent that lives **outside** this control plane. If
+your demo is Sales ⇄ Supply Chain within the platform, skip to §7.
+
+What follows is for showing the A2A governance path, or for a genuinely external
+peer.
+
 ### Register the peer — UI
 
-**A2A → add a peer.**
+**A2A → add a peer.** Two fields have rules that are easy to trip over.
+
+**Peer id** must be lowercase alphanumeric with hyphens, 2–63 characters. So
+`supply-chain-agent`, not `Supply Chain Agent`.
+
+**A2A endpoint** must be HTTPS, and must not be loopback, a private range, or
+link-local — `localhost`, `127.0.0.1`, `10.x`, `192.168.x` and `169.254.x` are
+all refused. That last one is the cloud metadata service, and refusing it is the
+point.
+
+There are then two routes, depending on whether a peer actually exists.
+
+#### Option A — preview-only (no peer deployed)
 
 | Field | Value |
 |---|---|
-| Name | `Supply Chain Agent` |
-| Base URL | the peer's HTTPS base (its card is served at `/.well-known/agent-card.json`) |
-| Auth | `Bearer (env var)` → `SUPPLY_CHAIN_AGENT_TOKEN`, or `None` for a local peer |
+| Peer id | `supply-chain-agent` |
+| Display name | `Supply Chain Agent` |
+| Owning tenant | your BU |
+| A2A endpoint | `https://REPLACE-ME-supply-chain.internal/` |
+| Allowed hosts | **leave empty** |
+| Auth | `None` |
+
+`REPLACE-ME` is the load-bearing part: the URL validator reports it as a
+placeholder, and registration is allowed without an allowlist. You get the whole
+governance path — Draft, approval, the Cedar scoped policy — without a live
+peer, and Discover/Send report that it is not configured rather than failing
+obscurely.
+
+Note the placeholder text in the endpoint box
+(`https://supply-chain-agent.internal.example.com`) is an EXAMPLE, not a usable
+value. It contains no `REPLACE-ME`, so the platform treats it as live and then
+refuses it for having no allowlist.
+
+#### Option B — a real peer behind a tunnel
+
+A locally-run peer is on `http://localhost`, which is refused twice over. Put an
+HTTPS tunnel in front of it:
+
+```bash
+cd a2a-demo && .venv/bin/python src/supply_chain_agent.py   # serves the card
+cloudflared tunnel --url http://localhost:8081              # gives an https URL
+```
+
+| Field | Value |
+|---|---|
+| A2A endpoint | `https://<name>.trycloudflare.com/` |
+| Allowed hosts | `<name>.trycloudflare.com` |
+| Auth | `None`, or `Bearer (env var)` → `SUPPLY_CHAIN_AGENT_TOKEN` |
+
+For a live endpoint the allowlist is **mandatory** and the hostname must match,
+or registration is refused with "a live A2A endpoint must be pinned to an
+allowlist".
+
+### What Allowed hosts is for
+
+An egress allowlist, comma- or space-separated. Registering an endpoint does not
+grant the right to reach it — the host must also be pinned. That is what stops a
+peer record being edited later to point somewhere internal, and it is the same
+guard that refuses `169.254.169.254`.
 
 Then **Discover** to fetch the card, and **Send** a message to test it.
 
