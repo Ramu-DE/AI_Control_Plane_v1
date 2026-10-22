@@ -23,6 +23,7 @@ export interface TierConfig {
   maxAgents: number;
   maxToolsPerAgent: number;
   maxKnowledgeBases: number;
+  maxMemories: number;
   monthlyTokenBudget: number | null; // null = unlimited
   enableAnalytics: boolean;
   enableAuditExport: boolean;
@@ -69,7 +70,16 @@ export interface Registry {
 export type RecordSource = "synchronize-from-endpoint" | "define-manually";
 
 // What kind of resource is being published.
-export type RecordType = "MCP" | "Agent" | "Agent skills" | "Custom" | "Knowledge Base";
+export type RecordType =
+  | "MCP"
+  | "Agent"
+  | "Agent skills"
+  | "Custom"
+  | "Knowledge Base"
+  // AgentCore Memory, governed like any other attachable resource: it must
+  // be Approved before an agent may use it, and its config declares a scope
+  // ceiling and retrieval bounds rather than granting ambient recall.
+  | "Memory";
 
 // Credential type used to reach the resource.
 export type CredentialType =
@@ -188,6 +198,37 @@ export interface McpSchema {
   toolSchema: ToolSchema[];
 }
 
+/**
+ * Memory configuration on an approved registry record.
+ *
+ * `maxScope` is the governance control: it is the WIDEST namespace a retrieval
+ * against this record may search, so a memory pinned to `actor` can never be
+ * read tenant-wide however the caller asks. `topK` bounds recall, because
+ * unbounded retrieval is how a memory feature turns into replaying the store
+ * into every prompt.
+ */
+export interface MemoryRecordConfig {
+  /**
+   * The tenant that OWNS this memory. Declared explicitly because
+   * `RegistryRecord.owner` is a user ("console-user"), not a tenant — reading
+   * ownership from it would refuse every call while looking like a policy
+   * decision. When unset the record is platform-wide and Cedar governs alone.
+   */
+  ownerTenantId?: string;
+  memoryId: string;
+  region: string;
+  strategyId: string;
+  /**
+   * The namespace template as configured on the AgentCore strategy. Retrieval
+   * renders THIS, so it cannot drift from what extraction wrote — a mismatch
+   * would return nothing and look indistinguishable from "no memories yet".
+   */
+  namespaceTemplate: string;
+  topK: number;
+  minRelevance?: number;
+  eventExpiryDays?: number;
+}
+
 export interface RegistryRecord {
   id: ID;
   registryId: ID; // the container this record belongs to
@@ -203,6 +244,10 @@ export interface RegistryRecord {
   mcpSchema?: McpSchema;
   // For Knowledge Base records — provider + connection + retrieval config.
   knowledgeConfig?: KnowledgeConfig;
+  // For Memory records — AgentCore identifiers, scope ceiling, retrieval
+  // bounds. Identifiers only: AWS access uses the server's own role, so no
+  // credential is ever stored on a record.
+  memoryConfig?: MemoryRecordConfig;
   // Convenience: the flat list of tool names exposed by this record.
   tools: string[];
   owner: string;
@@ -226,7 +271,13 @@ export interface AgentConfig {
   // Registry record ids whose tools this agent may use (approved records only).
   toolRefs: ID[];
   // Approved Knowledge Base record ids this agent may retrieve from (RAG).
-  knowledgeRefs: ID[];
+knowledgeRefs: ID[];
+  /**
+   * Approved Memory records this agent may use. Empty means the agent is
+   * stateless, which is the safe default: recall is a capability that must be
+   * granted, not assumed.
+   */
+  memoryRefs: ID[];
   // Execution and model compute are separate planes; each id is validated
   // against the provider/family catalog in lib/runtimes.ts.
   compute: AgentCompute;
@@ -491,7 +542,8 @@ export type AuditCategory =
   | "model"
   | "graph"
   | "a2a"
-  | "kb";
+  | "kb"
+  | "memory";
 
 export interface AuditEvent {
   id: ID;

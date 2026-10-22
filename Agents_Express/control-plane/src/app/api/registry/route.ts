@@ -122,6 +122,9 @@ export async function POST(req: NextRequest) {
       endpoint: body.endpoint,
       mcpSchema,
       knowledgeConfig: body.knowledgeConfig,
+      // Memory records carry AgentCore identifiers, the namespace template and
+      // the scope ceiling. Identifiers and bounds only — never a credential.
+      memoryConfig: body.memoryConfig,
       tools,
       owner: body.owner ?? "console-user",
       createdAt: new Date().toISOString(),

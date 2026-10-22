@@ -111,6 +111,34 @@ export async function POST(req: NextRequest) {
       { status: 403 }
     );
   }
+  // Memory: approved-only + tier limit. Recall is a capability that must be
+  // granted through the same review as a tool or a knowledge base — a memory
+  // holds personal data and shapes every future session, so an unapproved one
+  // must not be attachable.
+  const memoryRefs = body.memoryRefs ?? [];
+  if (memoryRefs.length > tier.maxMemories) {
+    return NextResponse.json(
+      {
+        error: `Tier limit: '${tenant.tenantName}' (${tenant.tier}) allows ${tier.maxMemories} memory/memories per agent.`,
+      },
+      { status: 403 }
+    );
+  }
+  const memNotApproved = memoryRefs.filter((id) => {
+    const rec = store.records.find((r) => r.id === id);
+    return !rec || rec.type !== "Memory" || rec.status !== "Approved";
+  });
+  if (memNotApproved.length > 0) {
+    return NextResponse.json(
+      {
+        error:
+          "Only approved Memory records can be attached. Invalid: " +
+          memNotApproved.join(", "),
+      },
+      { status: 400 }
+    );
+  }
+
   const kbNotApproved = knowledgeRefs.filter((id) => {
     const rec = store.records.find((r) => r.id === id);
     return !rec || rec.type !== "Knowledge Base" || rec.status !== "Approved";
@@ -158,6 +186,7 @@ export async function POST(req: NextRequest) {
     systemPrompt: body.systemPrompt ?? "",
     toolRefs,
     knowledgeRefs,
+    memoryRefs,
     compute,
     visibility: body.visibility ?? "private",
     status: body.status ?? "draft",

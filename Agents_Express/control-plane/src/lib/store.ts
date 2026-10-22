@@ -366,6 +366,7 @@ function seed(): Store {
           "You are the AnyCompany Expense Assistant. Help employees submit, list, approve, and reject expense reports using the available tools. \n\nIf a tool returns a \"forbidden\" or denial response, explain plainly that the caller does not have permission.",
         // Only the APPROVED expense_tool record is attachable; AWSKnowledgeMCP
         // stayed in Draft so it cannot be wired into the agent.
+        memoryRefs: [],
         toolRefs: ["rec-expense-tool"],
         knowledgeRefs: ["rec-kb-bedrock-policies"],
         compute: {
@@ -432,6 +433,20 @@ function seed(): Store {
   principal,
   action == Action::"queryKnowledgeBase",
   resource == Tool::"kb"
+);`,
+      },
+      {
+        id: "pol-gw-memory-perimeter",
+        name: "Gateway: authenticated personas may use agent memory",
+        layer: "gateway",
+        description:
+          "Memory perimeter. Stage 1 of the two-stage check in lib/memory/logic.ts — grants use of the recall path, not access to any particular memory. Scope one memory by adding a policy naming Tool::\"memory:<recordId>\". Note that the namespace, not this policy, is what isolates one tenant's records from another's: the policy decides whether recall may happen at all.",
+        enabled: true,
+        createdAt: iso(0),
+        cedar: `permit(
+  principal,
+  action == Action::"useMemory",
+  resource == Tool::"memory"
 );`,
       },
       {

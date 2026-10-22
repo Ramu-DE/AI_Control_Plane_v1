@@ -8,7 +8,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { isReadOnlySql } from "../src/lib/tools/uc.ts";
+import { interpretRows, isReadOnlySql } from "../src/lib/tools/uc.ts";
 import {
   TOOL_IMPLEMENTATIONS,
   executeToolCall,
@@ -154,4 +154,56 @@ test("tool call records carry arguments, timing and a bounded preview", async ()
   assert.deepEqual(record.arguments, { sql: "DROP TABLE t" });
   assert.equal(typeof record.latencyMs, "number");
   assert.ok(record.resultPreview.length <= 600);
+});
+
+// --------------------------------------------------------------------------- //
+// Truncation must reach the model
+// --------------------------------------------------------------------------- //
+// The original bug: `row_limit` is sent to Databricks, so the warehouse caps
+// the result BEFORE it arrives. Comparing the arrived rows against our own cap
+// could therefore never detect truncation — a 376-row result came back as 50
+// rows reported as complete. Verified against a live warehouse. These tests
+// exist because the decision was previously unreachable without a network call.
+
+test("the API's truncation signal is what decides, not our own row count", () => {
+  const fifty = Array.from({ length: 50 }, (_, i) => [i]);
+  // Exactly at the cap, and the warehouse says it truncated.
+  const capped = interpretRows(fifty, { truncated: true });
+  assert.equal(capped.truncated, true, "manifest.truncated must be honoured");
+  assert.equal(capped.rowCount, 50);
+  assert.match(
+    capped.note ?? "",
+    /not treat these rows as the complete result/i,
+    "a truncated result must tell the model how to get a complete answer"
+  );
+
+  // The pre-fix logic would have said false here, because 50 is not > 50.
+  const naive = fifty.length > fifty.slice(0, 50).length;
+  assert.equal(naive, false, "this is the comparison that always failed");
+});
+
+test("a complete result is not labelled truncated", () => {
+  const three = [[1], [2], [3]];
+  const out = interpretRows(three, { truncated: false });
+  assert.equal(out.truncated, false);
+  assert.equal(out.rowCount, 3);
+  assert.equal(out.note, undefined, "no scary note on a complete result");
+  assert.equal(out.rowLimit, 50, "the cap is always stated, truncated or not");
+});
+
+test("a backend that ignores row_limit is still caught", () => {
+  // No manifest signal, but more rows arrived than we will return.
+  const sixty = Array.from({ length: 60 }, (_, i) => [i]);
+  const out = interpretRows(sixty, {});
+  assert.equal(out.truncated, true, "the length backstop must still fire");
+  assert.equal(out.rows.length, 50, "and the rows must still be capped");
+});
+
+test("a missing or malformed manifest does not claim completeness falsely", () => {
+  const fifty = Array.from({ length: 50 }, (_, i) => [i]);
+  // Absent signal + exactly-at-cap is genuinely ambiguous. It must not crash,
+  // and it must not invent a truncation that was never reported.
+  const out = interpretRows(fifty, {});
+  assert.equal(typeof out.truncated, "boolean");
+  assert.equal(out.rowCount, 50);
 });

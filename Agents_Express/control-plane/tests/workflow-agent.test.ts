@@ -58,6 +58,7 @@ function agent(over: Partial<AgentConfig> = {}): AgentConfig {
     name: "Supplier Analyst",
     description: "",
     tenantId: "fn-supply",
+    memoryRefs: [],
     modelId: "m-dbx",
     systemPrompt: "You analyse supplier contracts.",
     toolRefs: [],

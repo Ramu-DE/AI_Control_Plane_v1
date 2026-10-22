@@ -192,6 +192,8 @@ export async function ucQuery(sql: string): Promise<{
   rowCount: number;
   rows: unknown[][];
   truncated: boolean;
+  rowLimit: number;
+  note?: string;
 }> {
   if (!isReadOnlySql(sql)) {
     throw new UcToolError(
@@ -224,12 +226,55 @@ export async function ucQuery(sql: string): Promise<{
   ));
   const result = (res.result as Record<string, unknown>) ?? {};
   const all = (result.data_array as unknown[][]) ?? [];
-  const rows = all.slice(0, MAX_ROWS);
   return {
     sql: sql.trim(),
     columns,
+    ...interpretRows(all, manifest),
+  };
+}
+
+/**
+ * Decide what the model is told about completeness. PURE, so it is testable
+ * without a warehouse — which is precisely why the original bug survived.
+ *
+ * TRUNCATION MUST BE VISIBLE. `row_limit` is sent to Databricks, so the
+ * warehouse has ALREADY capped the result before it arrives here. Comparing
+ * what arrived against our own cap therefore always said "not truncated": a
+ * 376-row result came back as 50 rows with `truncated: false`, and an agent
+ * reading that answers as though it had seen everything. Verified against a
+ * live warehouse.
+ *
+ * The authority is `manifest.truncated`, which the API sets when it applied the
+ * cap. The local length comparison is kept only as a backstop for a backend
+ * that ignores `row_limit`.
+ */
+export function interpretRows(
+  all: unknown[][],
+  manifest: Record<string, unknown>
+): {
+  rowCount: number;
+  rows: unknown[][];
+  truncated: boolean;
+  rowLimit: number;
+  note?: string;
+} {
+  const rows = all.slice(0, MAX_ROWS);
+  const truncated = manifest.truncated === true || all.length > rows.length;
+  return {
     rowCount: rows.length,
     rows,
-    truncated: all.length > rows.length,
+    truncated,
+    rowLimit: MAX_ROWS,
+    // A flag alone leaves the model stuck. Give it the route back to a
+    // complete answer: aggregate, or narrow the filter.
+    ...(truncated
+      ? {
+          note:
+            `Only the first ${rows.length} row(s) are shown; the query matched ` +
+            `more. Do NOT treat these rows as the complete result — re-query ` +
+            `with an aggregate (COUNT/SUM/GROUP BY) or a narrower WHERE clause ` +
+            `to answer over the whole set.`,
+        }
+      : {}),
   };
 }
