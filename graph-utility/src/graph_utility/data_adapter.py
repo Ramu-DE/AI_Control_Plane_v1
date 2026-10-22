@@ -88,6 +88,12 @@ _SELECT_RE = re.compile(
     r"^SELECT\s+(?P<select>.+?)\s+FROM\s+(?P<from>.+?)"
     r"(?:\s+WHERE\s+(?P<where>.+?))?"
     r"(?:\s+GROUP BY\s+(?P<group>.+?))?"
+    # ORDER BY is accepted because the materializer now emits it whenever it
+    # applies a row cap: LIMIT without an order returns an arbitrary row set,
+    # which made a capped build unreproducible. The fixture engine has to
+    # honour it or the offline tests would exercise a different query than
+    # production does.
+    r"(?:\s+ORDER BY\s+(?P<order>.+?))?"
     r"(?:\s+LIMIT\s+(?P<limit>\d+))?\s*$",
     re.IGNORECASE | re.DOTALL,
 )
@@ -188,6 +194,10 @@ class InMemoryDataAdapter(DataAdapter):
             out_cols, out_rows = self._aggregate(rows, select_items, group, alias_map)
         else:
             out_cols, out_rows = self._project(rows, select_items)
+
+        order = m.group("order")
+        if order:
+            out_rows = self._apply_order(out_rows, order)
 
         limit = m.group("limit")
         if limit is not None:
@@ -290,6 +300,29 @@ class InMemoryDataAdapter(DataAdapter):
             return cell == val
         pattern = str(val).replace("%", "").lower()
         return cell is not None and pattern in str(cell).lower()
+
+    @staticmethod
+    def _apply_order(rows, order):
+        """Sort by the named output ALIASES, ascending, NULLs last.
+
+        The materializer orders by alias (`c0`, `d0`, ...) rather than by
+        source column, so this resolves against the projected rows. Values are
+        compared as strings because a key may be of any type and a fixture must
+        not crash on a mixed column; the requirement is only that the order be
+        TOTAL and STABLE, not that it match a particular warehouse's collation.
+        """
+        keys = [part.strip().strip('"').strip() for part in order.split(",")]
+        keys = [k for k in keys if k]
+        if not keys:
+            return rows
+
+        def sort_key(row):
+            return tuple(
+                (1, "") if row.get(k) is None else (0, str(row.get(k)))
+                for k in keys
+            )
+
+        return sorted(rows, key=sort_key)
 
     @staticmethod
     def _parse_select(select: str):

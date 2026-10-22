@@ -123,10 +123,34 @@ queue, it never empties it on your behalf.
 - **A dangling reference emits no edge.** Verified live: the demo row whose
   `investigator_id` is NULL gets `atSite`, `forTrial` and `enrolledCount` but no
   `ledBy`.
-- **Truncation is reported.** Hitting a row cap names the table in `truncated`
-  and sets `complete == False`.
+- **Every approved class becomes typed nodes**, whether or not any of its
+  literal properties were approved. This was a defect: the materializer
+  iterated the tables that had DIRECT mappings, so a class approved with none
+  of its properties approved emitted no `rdf:type` at all — while the
+  relationship pass still minted edges pointing at its IRIs. Measured on the
+  ContractIQ fixture: **3 edges to entities the graph never defined, and a
+  manifest reporting `skipped=0`, `conflated=[]`.** A typed node with no
+  literals is a valid entity; a referenced node that does not exist is not.
+- **No edge to an undefined entity.** Every relationship object is checked
+  against the build's type triples. `dangling_edges` counts them,
+  `dangling_samples` shows the whole edge, and strict mode refuses. With the
+  fix above, the only remaining cause is a row cap.
+- **Truncation is reported *and reproducible*.** Hitting a row cap names the
+  table in `truncated` and sets `complete == False`. Capped queries now carry
+  `ORDER BY` on the subject key, because `LIMIT` without one returns an
+  arbitrary row set: a capped build was not reproducible, while `write_nquads`
+  hashed the bytes and presented that hash as provenance. Verified with a
+  control — shuffling the source row order across 5 runs gives **1** artifact
+  with the ordering and **5 distinct** artifacts without it.
 - **Deterministic output.** Quads are sorted, so the same mappings over the same
-  data give a byte-identical artifact; `write_nquads` returns a sha256.
+  data give a byte-identical artifact; `write_nquads` returns a sha256. Note
+  the provenance graph carries `prov:generatedAtTime`, so compare the data
+  graph when checking reproducibility.
+- **`sound` is separate from `complete`.** Coverage and correctness are
+  different risks with different remedies: a graph can be complete and unsound
+  (conflated entities) or sound and incomplete (capped). Both are reported, and
+  both are recorded *in* the provenance graph, because a consumer querying the
+  data months later has the manifest nowhere else.
 - **Identifier quoting is per-dialect and validated.** Databricks parses `"x"` as
   a *string literal*, so double-quoted identifiers are a parse error there —
   verified against a live warehouse. `SqlDialect` makes this an input, and an
@@ -136,6 +160,56 @@ queue, it never empties it on your behalf.
   usual shape of `owl:unionOf`) is reported in `warnings` and left unset, never
   collapsed to the first class in the union. This matches Neptune, which has no
   reasoner either.
+
+## One governed build (`build.py`)
+
+`build_graph()` is the supported entry point: materialize → entail → validate
+constraints → gate → serialize all three graphs.
+
+It exists because the gates used to live in `integration/build_graph_live.py`,
+which meant the demo runner was safe and every other caller — the control
+plane, a Databricks job — inherited nothing, and would have had to
+re-implement the same sequence and remember the same checks. **A guarantee
+belongs to the function, not to one script.**
+
+In `strict` mode it refuses four things, reporting all of them together so
+fixing one is not how you discover the next:
+
+| gate | why it is a refusal rather than a warning |
+|---|---|
+| `conflation` | two source rows merged onto one subject: the graph asserts something **false** |
+| `dangling-edges` | a relationship to an entity the graph never defines |
+| `truncation` | a prefix of the data presented as the whole; every count is wrong |
+| `constraint-violations` | the data breaks a declared axiom, so the **mapping** is wrong |
+
+Each is separately waivable (`allow_truncation=True`, …), because they are not
+equally severe and a reviewer getting past one must not silently waive the
+rest. **A waiver is written into the provenance graph** (`vocab/waived`), since
+someone querying the data later has no access to the build log.
+
+### Labels
+
+Nothing emitted `rdfs:label` before, so a traversal returned bare IRIs — close
+to useless for an agent composing an answer. Labels are now opt-in and
+explicit: `label_candidates()` *proposes* the approved string properties per
+class, and `label_properties=` names the chosen one. Picking by name shape
+would be the exact guess the mapping pipeline refuses to make, and a label is
+derived from triples already in the set, so it can never disagree with the
+property it came from. A designated property that is not an approved mapping
+raises rather than quietly emitting nothing.
+
+### Build-to-build diff
+
+`diff_graphs(before, after)` reports added/removed by predicate and by class,
+plus subjects gained and lost. Cheap, because each build owns its named graph
+and both versions are present at once.
+
+The point is that a mapping regression is otherwise invisible at build time:
+totals look plausible and the artifact hashes fine. On the fixture, dropping
+one mapping shows as `removed_by_predicate {feesAmount: 6}` against
+`removed_by_class {Contract: 6}`. Changing the subject IRI scheme shows as
+`+76/-76` with 23 subjects replaced and **zero** unchanged — the
+add-instead-of-replace signature that silently accumulates in a store.
 
 ## Loading into Neptune
 

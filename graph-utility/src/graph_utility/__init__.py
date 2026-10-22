@@ -196,6 +196,22 @@ from .compare import (
     score_arm,
 )
 
+# One governed build (materialise + entail + validate + gate) and the
+# build-to-build diff. `build_graph` is the supported entry point: the
+# soundness gates belong to it, not to whichever script a caller copied.
+from .build import (
+    BuildRefused,
+    BuildReport,
+    build_graph,
+    describe_build,
+)
+from .materialize import (
+    GraphDiff,
+    RDFS_LABEL,
+    diff_graphs,
+    label_candidates,
+)
+
 __all__ = [
     # legacy
     "GraphSource", "OntologySource", "BackendSource", "GraphSourceRegistry",
@@ -218,6 +234,9 @@ __all__ = [
     "ValidationIssue", "PublishedMapping", "PublishedMappingSet",
     "propose_mappings", "approve", "reject", "publish_mappings", "to_r2rml",
     # graph targets + R2RML handoff
+    # one governed build + diff + labels
+    "build_graph", "BuildReport", "BuildRefused", "describe_build",
+    "diff_graphs", "GraphDiff", "label_candidates", "RDFS_LABEL",
     "GraphTargetCapabilities", "TARGETS", "target_capabilities",
     "ONTOBRICKS", "NEPTUNE", "NEO4J", "to_r2rml_turtle", "R2RMLDocument",
     # mapping-method comparison

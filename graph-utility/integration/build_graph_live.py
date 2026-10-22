@@ -54,6 +54,10 @@ def main() -> int:
     ap.add_argument("--profile-joins", action="store_true",
                     help="measure value overlap for relationships that have no "
                          "declared foreign key, and use the result as evidence")
+    ap.add_argument("--force", action="store_true",
+                    help="build even when a soundness gate fires (conflated "
+                         "entities, dangling edges, broken constraints). The "
+                         "waiver is recorded in the provenance graph.")
     ap.add_argument("--reason", action="store_true",
                     help="materialise entailments into <graph>:inferred and "
                          "validate constraining axioms")
@@ -145,79 +149,40 @@ def main() -> int:
     print(f"published   : {len(published.mappings)} mapping(s), "
           f"set_fingerprint={published.set_fingerprint}")
 
-    # --- 5. materialise ---------------------------------------------------- #
-    triples, result = gu.materialize_graph(
-        published, adapter,
-        build_id=build_id,
-        base_uri=args.base_uri,
-        strict=False,
-        max_rows_per_table=args.max_rows_per_table,
-        table_qualifier=adapter.table_qualifier(),
-        dialect=DATABRICKS_DIALECT,
-    )
-    lines = gu.serialize_quads(triples, result.graph_uri)
-    print(f"\nMATERIALISED: {result.quads} quad(s) into <{result.graph_uri}>")
-    print(f"  instances : {result.class_instances}")
-    print(f"  literals  : {result.literal_triples}")
-    print(f"  edges     : {result.relationship_triples}")
-    print(f"  rows read : {result.rows_read}")
-    print(f"  skipped   : {result.rows_skipped_null_key} row(s) with a NULL key, "
-          f"{result.null_values_skipped} NULL value(s)")
-    print(f"  complete  : {result.complete}")
-    if result.has_conflation:
-        print(f"  CONFLATED : {result.rows_with_duplicate_key} row(s) shared a "
-              f"subject key in {result.conflated_tables} — those entities were "
-              f"MERGED, so the graph asserts something false")
-    for s in result.skipped:
-        print(f"  omitted   : {s.get('code')} — {s.get('message', '')[:120]}")
+    # --- 5-7. ONE governed build: materialise + entail + validate + gate --- #
+    # The gates used to live HERE, which meant this script was safe and every
+    # other caller inherited nothing. They now belong to `gu.build_graph`, so
+    # the control plane and a Databricks job get the same refusals for free.
+    axioms = client.list_axioms() if args.reason else None
+    try:
+        lines, report = gu.build_graph(
+            published, adapter,
+            build_id=build_id,
+            axioms=axioms,
+            base_uri=args.base_uri,
+            strict=not args.force,
+            allow_truncation=args.max_rows_per_table is not None,
+            max_rows_per_table=args.max_rows_per_table,
+            table_qualifier=adapter.table_qualifier(),
+            dialect=DATABRICKS_DIALECT,
+            reason=args.reason,
+        )
+    except gu.BuildRefused as e:
+        print(f"\nBUILD REFUSED\n{e}")
+        for line in gu.describe_build(e.report):
+            print(f"  {line}")
+        return 1
 
-    # --- 6. reasoning + constraint validation ------------------------------ #
-    entail_report = None
-    violations: list = []
-    if args.reason:
-        axioms = client.list_axioms()
-        declared = sum(len(v) for v in axioms.values())
-        inferred, entail_report = gu.entail(triples, axioms)
-        print(f"\nREASONING   : {declared} axiom(s) "
-              f"(fingerprint {gu.axioms_fingerprint(axioms)}); "
-              f"{entail_report.inferred} triple(s) inferred "
-              f"in {entail_report.iterations} pass(es)")
-        for rule, n in sorted(entail_report.by_rule.items()):
-            print(f"  {rule:24} {n}")
-        if entail_report.skipped_literal_range:
-            print(f"  (skipped {entail_report.skipped_literal_range} literal-range "
-                  f"entailment(s): a literal cannot be a subject)")
-        print(f"  complete  : {entail_report.complete}")
-
-        violations = gu.validate_constraints(triples, axioms, inferred=inferred)
-        if violations:
-            print(f"\nCONSTRAINT VIOLATIONS: {len(violations)} — "
-                  f"these indicate the MAPPING is wrong")
-            for v in violations[:10]:
-                print(f"  {v.code}: {v.subject}\n      {v.message}")
-        else:
-            print("  violations: none — the mapping breaches no declared constraint")
-
-        # Inferred triples go to their OWN graph, never mixed with asserted.
-        lines = lines + gu.serialize_quads(inferred, f"{result.graph_uri}:inferred")
-
-    # --- 7. provenance, in its own graph ----------------------------------- #
-    extra = {}
-    if entail_report:
-        extra = {
-            "axiomsFingerprint": gu.axioms_fingerprint(axioms),
-            "inferredGraph": f"{result.graph_uri}:inferred",
-            "inferredCount": str(entail_report.inferred),
-            "entailmentComplete": str(entail_report.complete).lower(),
-            "constraintViolations": str(len(violations)),
-        }
-    prov = gu.provenance_quads(published, result, base_uri=args.base_uri, extra=extra)
-    lines = lines + prov
-    result.provenance_quads = len(prov)
-    result.quads = len(lines)
+    result = report.result
+    entail_report = report.entailment
+    violations = report.violations
+    print("")
+    for line in gu.describe_build(report):
+        print(f"  {line}")
     print(f"\nTOTAL       : {len(lines)} quad(s) "
-          f"({result.quads - len(prov) - (entail_report.inferred if entail_report else 0)} asserted, "
-          f"{entail_report.inferred if entail_report else 0} inferred, {len(prov)} provenance)")
+          f"({len(lines) - result.provenance_quads - report.inferred_triples} "
+          f"asserted, {report.inferred_triples} inferred, "
+          f"{result.provenance_quads} provenance)")
 
     if args.out:
         meta = gu.write_nquads(lines, args.out)
