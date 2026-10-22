@@ -91,6 +91,55 @@ def test_axioms_are_read_from_the_ontology():
 
 
 @test
+def test_neptune_and_file_readers_agree_on_axioms():
+    """The two ontology sources must produce IDENTICAL axioms.
+
+    An ontology that reasons one way when read from a file and another way when
+    read from a cluster is worse than one that does not reason at all. The
+    SPARQL round trip cannot be exercised without Neptune, but the part that
+    can silently diverge — assembling result rows into the axiom dict — is pure
+    and is checked here by replaying the file reader's own axioms as SPARQL
+    rows.
+    """
+    from graph_utility.ontology import (
+        AXIOM_FLAG_KINDS, AXIOM_PAIR_KINDS, assemble_axioms)
+
+    from_file = _axioms()
+    binary_rows = []
+    for kind in AXIOM_PAIR_KINDS:
+        for s, o in from_file[kind]:
+            binary_rows.append({"kind": kind, "s": s, "o": o})
+    for a, b in from_file["disjoint_with"]:
+        binary_rows.append({"kind": "disjoint_with", "s": a, "o": b})
+    characteristic_rows = [
+        {"kind": kind, "s": uri}
+        for kind in AXIOM_FLAG_KINDS for uri in from_file[kind]
+    ]
+    from_sparql = assemble_axioms(binary_rows, characteristic_rows)
+    check(from_sparql == from_file,
+          "the SPARQL assembler must reproduce the file reader's axioms exactly")
+
+    # And it must apply the same exclusions to rows a real endpoint would send.
+    noisy = assemble_axioms(
+        [{"kind": "sub_class_of", "s": "http://www.w3.org/2000/01/rdf-schema#Class",
+          "o": CT + "Thing"},                                  # meta SUBJECT
+         {"kind": "range", "s": CT + "phase",
+          "o": "http://www.w3.org/2001/XMLSchema#string"},     # meta OBJECT: keep
+         {"kind": "sub_class_of", "s": None, "o": CT + "X"},   # malformed
+         {"kind": "disjoint_with", "s": CT + "B", "o": CT + "A"}],
+        [{"kind": "transitive", "s": CT + "p"},
+         {"kind": "bogus", "s": CT + "q"}])
+    check(noisy["sub_class_of"] == [],
+          "a meta-vocabulary subject must be dropped, as in the file reader")
+    check((CT + "phase", "http://www.w3.org/2001/XMLSchema#string")
+          in noisy["range"], "but a meta OBJECT such as an xsd range is kept")
+    check(noisy["disjoint_with"] == [(CT + "A", CT + "B")],
+          "disjointness must be normalised to a sorted pair, so A/B == B/A")
+    check(noisy["transitive"] == [CT + "p"], "characteristics are read")
+    check("bogus" not in noisy, "an unknown kind must not create a key")
+
+
+@test
 def test_meta_vocabulary_is_not_redefined_by_axioms():
     ax = _axioms()
     for pair in ax["sub_class_of"] + ax["sub_property_of"]:

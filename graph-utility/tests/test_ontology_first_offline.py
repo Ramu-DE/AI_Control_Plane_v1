@@ -486,6 +486,57 @@ def test_hostile_values_round_trip_through_a_real_rdf_parser():
 
 
 @test
+def test_duplicate_subject_keys_are_detected_not_silently_conflated():
+    """Two rows sharing a subject key must be REPORTED, not quietly merged.
+
+    This is not hypothetical. Unity Catalog primary keys are informational and
+    unenforced, so a DECLARED key does not rule it out. When it happens the
+    rows' values merge onto one subject, and the graph then asserts that a
+    single site has two different names — false, rather than incomplete. The
+    manifest must say so, and must not report two instances where one node
+    exists.
+    """
+    from graph_utility.discovery import (
+        ColumnMetadata, KeyMetadata, KeyType, LogicalType, TableMetadata)
+    from graph_utility.data_adapter import InMemoryDataAdapter, InMemoryTable
+
+    meta = TableMetadata(
+        name="site",
+        columns=(ColumnMetadata("site_id", LogicalType.STRING, nullable=False),
+                 ColumnMetadata("site_name", LogicalType.STRING)),
+        keys=(KeyMetadata(KeyType.PRIMARY, ("site_id",), name="pk"),),
+    )
+    adapter = InMemoryDataAdapter("dupes", [InMemoryTable(meta, [
+        {"site_id": "S1", "site_name": "North Clinic"},
+        {"site_id": "S1", "site_name": "A Different Clinic"},   # same key!
+    ])])
+    proposals = gu.propose_mappings(adapter.discover(), _schema())
+    gu.auto_approve(proposals)
+    published = gu.publish_mappings("dupes", proposals, strict=False)
+    lines, result = gu.materialize_graph(
+        published, adapter, build_id="dupe01",
+        base_uri="http://example.org/resource/", strict=False)
+
+    check(result.rows_with_duplicate_key == 1,
+          f"the repeat must be counted, got {result.rows_with_duplicate_key}")
+    check(result.has_conflation, "and surfaced as conflation")
+    check("site" in result.conflated_tables, "naming the table, so it can be fixed")
+    check(result.class_instances == 1,
+          f"ONE node exists, so one instance must be reported, not 2 — got "
+          f"{result.class_instances}")
+    # The damage itself is still visible in the graph: both names on one subject.
+    subject = gu.mint_subject_iri("http://example.org/resource/", "site", ["S1"])
+    names = [o for s, p, o in lines
+             if s == subject and p == CT + "siteName"]
+    check(len(names) == 2,
+          "both values land on the single subject — that is the false assertion "
+          "the counter exists to warn about")
+    # A clean table must not be flagged.
+    _, _, _, _, _, _, _, clean = _pipeline()
+    check(not clean.has_conflation, "a unique-keyed build must report no conflation")
+
+
+@test
 def test_relationships_become_edges_between_minted_subjects():
     _, _, _, _, _, published, lines, result = _pipeline()
     rels = [m for m in published.mappings

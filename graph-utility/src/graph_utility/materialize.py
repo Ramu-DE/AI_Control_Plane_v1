@@ -33,6 +33,12 @@ invents what the mappings would not justify:
   - TRUNCATION IS REPORTED. If a row cap is hit, the table is named in
     `truncated` and the result is explicitly `complete == False`. A partial
     graph never presents itself as whole.
+  - CONFLATION IS DETECTED. If two rows share a subject key, their values merge
+    onto one subject and the graph asserts something FALSE rather than merely
+    incomplete. Those rows are counted in `rows_with_duplicate_key`, the table
+    is named in `conflated_tables`, and `has_conflation` is true. This is not
+    hypothetical: Unity Catalog primary keys are informational and unenforced,
+    so a declared constraint does not rule it out.
   - Output is deterministic: quads are emitted in sorted order, so the same
     mappings over the same data produce a byte-identical artifact.
 
@@ -236,6 +242,12 @@ class MaterializationResult:
     rows_read: int = 0
     rows_skipped_null_key: int = 0
     null_values_skipped: int = 0
+    #: Rows whose subject key had already been seen. Each one means two source
+    #: rows were CONFLATED into a single subject carrying both their values —
+    #: a false assertion, not a missing one.
+    rows_with_duplicate_key: int = 0
+    #: Tables where that happened, so the cause can be found.
+    conflated_tables: list[str] = field(default_factory=list)
     per_table: dict[str, int] = field(default_factory=dict)
     skipped: list[dict[str, Any]] = field(default_factory=list)
     truncated: list[str] = field(default_factory=list)
@@ -243,12 +255,23 @@ class MaterializationResult:
 
     @property
     def complete(self) -> bool:
-        """False whenever any row cap was hit — a partial graph says so."""
+        """False whenever any row cap was hit — a partial graph says so.
+
+        Completeness is about COVERAGE only. A conflated build can be complete
+        and still wrong, which is why `has_conflation` is reported separately
+        rather than folded in here.
+        """
         return not self.truncated
+
+    @property
+    def has_conflation(self) -> bool:
+        """True when a subject key was not unique, so entities were merged."""
+        return self.rows_with_duplicate_key > 0
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
         d["complete"] = self.complete
+        d["has_conflation"] = self.has_conflation
         return d
 
 
@@ -423,6 +446,13 @@ def materialize_graph(
             result.truncated.append(table)
 
         emitted_here = 0
+        # Subject keys are supposed to identify a row. When two rows share one,
+        # their property values MERGE onto a single subject — the graph then
+        # asserts that one entity has both rows' values, which is false rather
+        # than merely incomplete. Unity Catalog constraints are informational
+        # and unenforced, so a DECLARED primary key does not rule this out; the
+        # only way to know is to watch for it here.
+        seen_subjects: set[str] = set()
         for row in rows:
             result.rows_read += 1
             key_values = [row.get(f"c{i}") for i in range(len(keys))]
@@ -430,9 +460,14 @@ def materialize_graph(
                 result.rows_skipped_null_key += 1
                 continue
             subject = mint_subject_iri(base_uri, table, key_values)
+            if subject in seen_subjects:
+                result.rows_with_duplicate_key += 1
+                if table not in result.conflated_tables:
+                    result.conflated_tables.append(table)
+            else:
+                seen_subjects.add(subject)
+                emitted_here += 1
             triples.add((subject, RDF_TYPE, obj_iri(cls.ontology_uri)))
-            result.class_instances += 1
-            emitted_here += 1
             for offset, m in enumerate(mappings):
                 value = row.get(f"c{len(keys) + offset}")
                 if value is None:
@@ -441,6 +476,10 @@ def materialize_graph(
                 lt = LogicalType.coerce(m.logical_type)
                 triples.add((subject, m.ontology_uri, obj_literal(typed_literal(value, lt))))
                 result.literal_triples += 1
+        # Count DISTINCT subjects, not rows: reporting one instance per row
+        # while the graph holds one node is exactly the kind of quiet
+        # disagreement the manifest exists to prevent.
+        result.class_instances += len(seen_subjects)
         result.per_table[table] = emitted_here
 
     # ---- relationships ---- #

@@ -273,7 +273,7 @@ def propose_mappings(
             # The subject key for this class is the table's DISCOVERED primary
             # key. Without one, the class cannot produce stable subject IRIs, so
             # the proposal is blocked (no fabricated surrogate key).
-            pk = t.primary_key()
+            pk = t.subject_key()
             subject_cols = tuple(pk.columns) if pk else ()
             issues = _name_only_issues(conf)
             if not subject_cols:
@@ -296,7 +296,8 @@ def propose_mappings(
             if subject_cols:
                 evidence.append(Evidence(
                     "key-metadata",
-                    f"subject key {list(subject_cols)} from discovered PK",
+                    f"subject key {list(subject_cols)} from declared "
+                    f"{pk.key_type.value} constraint '{pk.name or '?'}'",
                     weight=0.2))
             proposals.append(MappingProposal(
                 id=next_id(), kind=ProposalKind.CLASS,
@@ -560,7 +561,15 @@ def reject(proposal: MappingProposal, approver: str, notes: Optional[str] = None
 AUTO_APPROVE_MIN_CONFIDENCE = 0.55
 
 # Evidence kinds that record a measurement rather than a resemblance.
-HARD_EVIDENCE_KINDS = frozenset({"key-metadata", "type-compatibility"})
+# `uniqueness-verified` is a measurement taken against the data during this
+# build, which makes it no weaker than `key-metadata`: a Unity Catalog primary
+# key is informational and unenforced, so a declared constraint is a statement
+# of intent while this is an observation.
+HARD_EVIDENCE_KINDS = frozenset({
+    "key-metadata", "type-compatibility", "uniqueness-verified",
+})
+#: Evidence kinds that can justify a subject key for a CLASS proposal.
+SUBJECT_KEY_EVIDENCE = frozenset({"key-metadata", "uniqueness-verified"})
 
 # Marks machine decisions in the audit trail so they can never be mistaken for,
 # or counted as, human review.
@@ -642,10 +651,22 @@ def auto_approval_verdict(
         )
 
     if proposal.kind == ProposalKind.CLASS:
-        if "key-metadata" not in kinds:
-            return False, "class has no discovered primary key for subject IRIs"
+        # NOTE on the absence of a confidence check here, which is deliberate
+        # and not an oversight: a CLASS proposal's confidence is capped at
+        # NAME_SIMILARITY_MAX_CONFIDENCE, permanently BELOW min_confidence, so
+        # applying the floor would block every class and the pipeline would
+        # produce nothing. A class is therefore gated on the two things that do
+        # carry information — an exact table match (checked above) and real
+        # subject-key evidence — rather than on a number that cannot vary.
+        key_evidence = kinds & SUBJECT_KEY_EVIDENCE
+        if not key_evidence:
+            return False, "class has no subject key, declared or measured"
+        if not proposal.subject_columns:
+            return False, "class has key evidence but no subject columns set"
+        measured = key_evidence == {"uniqueness-verified"}
         return True, (
-            f"class: exact table match plus discovered primary key "
+            f"class: exact table match plus "
+            f"{'measured unique' if measured else 'declared'} subject key "
             f"{list(proposal.subject_columns)}"
         )
 

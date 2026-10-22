@@ -229,31 +229,32 @@ still probed.
 
 ## Known limits
 
-- **Candidate selection is still name-shaped.** Profiling removes the guess from
-  the *verdict*, not from the *search*: `looks_like_identifier` only shortlists
-  columns ending `id|key|code|uuid|guid|number|no|nbr`, so a foreign key called
-  `buyer_ref` or `parent_fk` is never probed at all. Widening the shortlist (or
-  probing every column pair within a budget) is the fix.
-- **Reasoning is an RDFS-plus-safe-OWL subset, batch only.** Re-publishing
-  re-derives the whole closure. RDFox's differentiator is *incremental*
-  materialisation; the rule set here is shaped to port to it
-  (`docs/RDFOX_assessment.md`).
-- **Only the file ontology source reads axioms.** `RdfFileOntologyClient.list_axioms()`
-  exists; there is no matching SPARQL implementation on `NeptuneOntologyClient`
-  yet, so a Neptune-sourced ontology currently drives mapping but not reasoning.
-- **Matching is otherwise lexical.** Jaccard token overlap plus declared keys,
-  measured overlap and `rdfs:domain`. No `skos:altLabel`, embedding or
-  LLM-assisted alignment, so an ontology whose terms differ from the dataset's
-  vocabulary defers most proposals to a human. The right failure direction, but
-  a limit.
-- **`planner.SqlCompiler` still double-quotes identifiers**, so the *query* path
-  would fail on Databricks for the same reason the materialiser did. Unfixed;
-  `materialize.SqlDialect` shows the shape of the fix.
-- **A table with no declared primary key yields no key**, so its class is blocked
-  and nothing is materialised for it. Unlike joins, subject identity is not yet
-  profiled — a `uniqueness-verified` evidence kind (`COUNT(*)` vs
-  `COUNT(DISTINCT col)`) would let an empirically-unique column satisfy the gate
-  honestly. Until then the remedy is to declare the constraint.
+- **Reasoning is batch-only.** Re-publishing re-derives the whole closure.
+  Incremental maintenance (RDFox's actual differentiator) is under design;
+  deletion is the hard half, since an inferred triple must survive if it still
+  has an independent derivation.
+- **The Neptune axiom reader is written but unverified.**
+  `NeptuneOntologyClient.list_axioms()` issues two UNION queries plus a
+  blank-node count, and `ontology.assemble_axioms` — the part that can diverge
+  silently — is pure and tested for exact parity with the file reader. The
+  SPARQL round trip itself has never run against a cluster.
+- **Composite key discovery probes PAIRS only.** A three-column natural key is
+  not found, and nor is a composite key whose columns are not key-shaped.
+- **A measured key expires.** Uniqueness is a point-in-time measurement, so it
+  is re-measured every build rather than cached. A Unity Catalog *declared* key
+  is no stronger — UC constraints are informational and unenforced — which is
+  why `materialize.py` now detects conflation on both paths.
+- **Matching is otherwise lexical.** Jaccard token overlap plus declared and
+  measured keys, measured containment and `rdfs:domain`. No `skos:altLabel`,
+  embedding or LLM-assisted alignment, and no stemming — so an ontology class
+  `Supplier` will not match a table named `suppliers`. An ontology whose terms
+  differ from the dataset's vocabulary defers most proposals to a human: the
+  right failure direction, but a limit.
+- **`planner.SqlCompiler` still double-quotes identifiers**, so the *query*
+  path would fail on Databricks for the same reason the materialiser did.
+  Related: `SemanticPlanner._guard_fanout` only triggers on a `many-to-many`
+  cardinality that nothing in the codebase ever emits, so it is effectively
+  dead. Both unfixed; `materialize.SqlDialect` shows the shape of the first fix.
 - **The Neptune load step is still unexecuted.** No cluster exists in this
   account; `drop_graph_sparql` and the loader invocation are emitted but have
   not been run against a live endpoint.

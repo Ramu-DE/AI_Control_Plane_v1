@@ -48,6 +48,9 @@ def main() -> int:
                     help="stand in for a human reviewer and approve what the "
                          "policy deferred (records this name as the approver)")
     ap.add_argument("--json", action="store_true", help="emit the manifest as JSON")
+    ap.add_argument("--profile-keys", action="store_true",
+                    help="measure column uniqueness so a table with no declared "
+                         "primary key can still be keyed, honestly")
     ap.add_argument("--profile-joins", action="store_true",
                     help="measure value overlap for relationships that have no "
                          "declared foreign key, and use the result as evidence")
@@ -98,6 +101,17 @@ def main() -> int:
 
     # --- 3. propose, profile, then threshold auto-approve ------------------ #
     proposals = gu.propose_mappings(discovery, schema)
+
+    if args.profile_keys:
+        proofs = gu.enrich_classes_with_uniqueness(proposals, adapter, discovery)
+        adopted = [p for p in proposals
+                   if p.kind == gu.ProposalKind.CLASS and p.subject_columns
+                   and any(e.kind == "uniqueness-verified" for e in p.evidence)]
+        print(f"key probes  : {len(proofs)} uniqueness probe(s), "
+              f"{len(adopted)} class(es) keyed by measurement")
+        for pr in proofs:
+            mark = "OK  " if pr.proves_identity else "no  "
+            print(f"  {mark}{pr.describe()}")
 
     if args.profile_joins:
         measurements = gu.enrich_relationships_with_overlap(proposals, adapter, discovery)
@@ -150,6 +164,10 @@ def main() -> int:
     print(f"  skipped   : {result.rows_skipped_null_key} row(s) with a NULL key, "
           f"{result.null_values_skipped} NULL value(s)")
     print(f"  complete  : {result.complete}")
+    if result.has_conflation:
+        print(f"  CONFLATED : {result.rows_with_duplicate_key} row(s) shared a "
+              f"subject key in {result.conflated_tables} — those entities were "
+              f"MERGED, so the graph asserts something false")
     for s in result.skipped:
         print(f"  omitted   : {s.get('code')} — {s.get('message', '')[:120]}")
 

@@ -385,6 +385,43 @@ class UnityCatalogDataAdapter(DataAdapter):
         return profiles
 
     # ----------------------------------------------------------------- #
+    # Native uniqueness proof
+    # ----------------------------------------------------------------- #
+    def verify_uniqueness(self, table: str, columns: tuple[str, ...]):
+        """Prove (or disprove) that `columns` identify a row, in one statement.
+
+        Exact at any table size, so unlike a sampled profile the answer can
+        actually satisfy the subject-key gate. Empty strings are excluded
+        alongside NULLs because `materialize.py` treats both as a missing key —
+        counting them here would prove uniqueness over rows that are then
+        skipped.
+        """
+        from .overlap import UniquenessProof
+
+        q = DATABRICKS_DIALECT.ident
+        fq = f"{q(self.catalog)}.{q(self.schema)}.{q(table)}"
+        cols = ", ".join(q(c) for c in columns)
+        present = " AND ".join(
+            f"({q(c)} IS NOT NULL AND CAST({q(c)} AS STRING) <> '')" for c in columns
+        )
+        res = self._sql(
+            f"""SELECT COUNT(*) AS total,
+                       SUM(CASE WHEN {present} THEN 1 ELSE 0 END) AS present_rows,
+                       COUNT(DISTINCT CASE WHEN {present}
+                             THEN CONCAT_WS('\\u001f', {cols}) END) AS distinct_keys
+                FROM {fq}""",
+            limit=1,
+        )
+        row = res.rows[0] if res.rows else {}
+        return UniquenessProof(
+            table=table, columns=tuple(columns),
+            rows=int(row.get("total") or 0),
+            non_null_rows=int(row.get("present_rows") or 0),
+            distinct=int(row.get("distinct_keys") or 0),
+            exhaustive=True, method="aggregate-sql",
+        )
+
+    # ----------------------------------------------------------------- #
     # Native value-overlap profiling
     # ----------------------------------------------------------------- #
     def join_overlap(

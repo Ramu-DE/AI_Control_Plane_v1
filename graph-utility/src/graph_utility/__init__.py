@@ -79,6 +79,7 @@ from .mapping import (
     AUTO_APPROVE_MIN_CONFIDENCE,
     NAME_SIMILARITY_MAX_CONFIDENCE,
     HARD_EVIDENCE_KINDS,
+    SUBJECT_KEY_EVIDENCE,
 )
 
 # --- ontology-first: supplied ontology -> real graph ---
@@ -112,6 +113,10 @@ from .materialize import (
 )
 from .overlap import (
     JoinOverlap,
+    UniquenessProof,
+    verify_uniqueness,
+    enrich_classes_with_uniqueness,
+    MIN_ROWS_FOR_UNIQUENESS_PROOF,
     measure_join_overlap,
     candidate_column_sets,
     enrich_relationships_with_overlap,
@@ -209,7 +214,9 @@ __all__ = [
     # value-overlap profiling
     "JoinOverlap", "measure_join_overlap", "candidate_column_sets",
     "enrich_relationships_with_overlap", "MIN_CONTAINMENT_FOR_AUTO",
-    "DEFAULT_PROBE_LIMIT",
+    "DEFAULT_PROBE_LIMIT", "UniquenessProof", "verify_uniqueness",
+    "enrich_classes_with_uniqueness", "MIN_ROWS_FOR_UNIQUENESS_PROOF",
+    "SUBJECT_KEY_EVIDENCE",
     # reasoning + constraint validation
     "EntailmentReport", "Violation", "entail", "prepare_tbox",
     "validate_constraints", "RDF_TYPE",

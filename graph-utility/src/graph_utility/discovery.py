@@ -161,6 +161,22 @@ class TableMetadata:
                 return k
         return None
 
+    def subject_key(self) -> Optional[KeyMetadata]:
+        """The declared key usable for minting subject IRIs.
+
+        A PRIMARY key if there is one, otherwise a declared UNIQUE constraint:
+        both identify a row, so refusing the second would block a table for no
+        reason. `primary_key()` stays literal — it answers only about PRIMARY —
+        because other callers ask that narrower question.
+        """
+        pk = self.primary_key()
+        if pk:
+            return pk
+        for k in self.keys:
+            if k.key_type == KeyType.UNIQUE:
+                return k
+        return None
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,
