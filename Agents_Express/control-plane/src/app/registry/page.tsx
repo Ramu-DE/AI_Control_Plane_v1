@@ -13,7 +13,7 @@ import {
   EmptyState,
 } from "@/components/ui";
 import { AwsModeBadge } from "@/components/AwsModeBadge";
-import { getJSON, sendJSON } from "@/lib/api";
+import { deleteJSON, getJSON, sendJSON } from "@/lib/api";
 import {
   CredentialType,
   KbProvider,
@@ -707,6 +707,48 @@ function RecordDetails({
     await onChanged();
   }
 
+  const [removing, setRemoving] = useState(false);
+  const [removeError, setRemoveError] = useState<string | null>(null);
+
+  async function remove() {
+    // The server decides whether this is a delete or a deprecate, so the
+    // confirmation says what will actually happen rather than promising
+    // "delete" and quietly doing something else.
+    const willDeprecate = record.status === "Approved";
+    const msg = willDeprecate
+      ? `'${record.name}' is Approved, so it will be DEPRECATED rather than deleted — ` +
+        `it stops being attachable but stays resolvable, because the audit trail ` +
+        `refers to it.\n\nContinue?`
+      : `Permanently delete '${record.name}' (${record.status})?\n\n` +
+        `It was never approved, so nothing can be referencing it.`;
+    if (typeof window !== "undefined" && !window.confirm(msg)) return;
+
+    setRemoveError(null);
+    setRemoving(true);
+    try {
+      const { ok, status, body } = await deleteJSON<{
+        outcome?: string;
+        error?: string;
+      }>(`/api/registry?recordId=${encodeURIComponent(record.id)}`);
+      if (!ok) {
+        // A 409 means something still references it, and the body names what.
+        // That list is the actionable part, so surface it rather than a status.
+        setRemoveError(body.error ?? `Removal failed (HTTP ${status}).`);
+        return;
+      }
+      if (body.outcome === "deprecated") {
+        await onChanged();
+      } else {
+        onBack();
+        await onChanged();
+      }
+    } catch (e) {
+      setRemoveError((e as Error).message);
+    } finally {
+      setRemoving(false);
+    }
+  }
+
   const fmt = (iso: string) =>
     new Date(iso).toLocaleString(undefined, {
       month: "short",
@@ -732,6 +774,23 @@ function RecordDetails({
             >
               Update status ▾
             </button>
+            <button
+              type="button"
+              className="btn-ghost ml-2 text-red-700 hover:bg-red-50"
+              onClick={remove}
+              disabled={removing || record.status === "Deprecated"}
+              title={
+                record.status === "Approved"
+                  ? "Approved records are deprecated, not deleted"
+                  : "Delete this record"
+              }
+            >
+              {removing
+                ? "Removing…"
+                : record.status === "Approved"
+                  ? "Deprecate"
+                  : "Delete"}
+            </button>
             {menuOpen && nextActions.length > 0 && (
               <div className="absolute right-0 z-10 mt-1 w-52 rounded-lg border border-slate-200 bg-white py-1 shadow-lg">
                 {nextActions.map((a) => (
@@ -749,6 +808,12 @@ function RecordDetails({
           </div>
         }
       />
+
+      {removeError && (
+        <div className="mx-4 mb-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 sm:mx-6 lg:mx-8">
+          <b>Not removed.</b> {removeError}
+        </div>
+      )}
 
       <div className="space-y-6 px-4 py-4 pb-10 sm:px-6 lg:px-8">
         <div className="flex items-center gap-3">

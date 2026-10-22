@@ -30,3 +30,18 @@ export async function sendJSON<T>(
   }
   return res.json() as Promise<T>;
 }
+
+/**
+ * DELETE that returns the body on both success and failure.
+ *
+ * `sendJSON` throws on a non-2xx, which loses the response. That matters here:
+ * a refused removal answers 409 WITH the list of things still referencing the
+ * record, and that list is the only actionable part of the message.
+ */
+export async function deleteJSON<T>(
+  url: string
+): Promise<{ ok: boolean; status: number; body: T & { error?: string } }> {
+  const res = await fetch(withBase(url), { method: "DELETE" });
+  const body = await res.json().catch(() => ({}));
+  return { ok: res.ok, status: res.status, body: body as T & { error?: string } };
+}
