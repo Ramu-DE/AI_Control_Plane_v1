@@ -3,7 +3,13 @@
 import { useEffect, useState } from "react";
 import { PageHeader, Field, Modal, EmptyState } from "@/components/ui";
 import { getJSON, sendJSON } from "@/lib/api";
-import { CatalogModel, CognitoGroup, InferenceProvider, Persona } from "@/lib/types";
+import {
+  CatalogModel,
+  CognitoGroup,
+  INFERENCE_PROVIDERS,
+  InferenceProvider,
+  Persona,
+} from "@/lib/types";
 import { GovernanceTab } from "@/components/GovernanceTab";
 
 export default function SettingsPage() {
@@ -272,9 +278,9 @@ export default function SettingsPage() {
                   })
                 }
               >
-                <option>Amazon Bedrock</option>
-                <option>Anthropic</option>
-                <option>OpenAI</option>
+                {INFERENCE_PROVIDERS.map((p) => (
+                  <option key={p}>{p}</option>
+                ))}
               </select>
             </Field>
           </div>

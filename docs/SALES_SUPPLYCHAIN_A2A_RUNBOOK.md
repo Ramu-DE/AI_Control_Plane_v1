@@ -81,6 +81,21 @@ WHERE destination = 'Frankfurt';
 Leave the token field as the **env var name** `DATABRICKS_TOKEN`, not a token.
 Records store credential references; nothing in the platform stores a secret.
 
+> **If `Databricks Model Serving` is missing from the dropdown**, your build
+> predates the fix. The Settings form hard-coded three of the five providers,
+> so `Databricks Model Serving` and `AgentCore Gateway` were unreachable from
+> the UI even though the API accepted them. Pull the latest, or add the model
+> via the API:
+>
+> ```bash
+> curl -s -X POST $API/catalog -H 'Content-Type: application/json' -d '{
+>   "name":"Llama 3.3 70B (Databricks)","modelProvider":"Meta",
+>   "modelId":"databricks-meta-llama-3-3-70b-instruct",
+>   "inferenceProvider":"Databricks Model Serving",
+>   "inferenceApi":"Chat Completions (/v1/chat/completions)",
+>   "tokenEnvVar":"DATABRICKS_TOKEN"}'
+> ```
+
 > If you prefer Bedrock, pick `Amazon Bedrock` and a Claude model id instead.
 > Whichever you choose, §3 must match it — a Databricks model with an AWS
 > runtime is refused at create time, deliberately.

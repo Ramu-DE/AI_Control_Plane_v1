@@ -298,6 +298,36 @@ export type InferenceProvider =
 
 export type InferenceApi = "Responses API (/v1/responses)" | "Chat Completions (/v1/chat/completions)";
 
+/**
+ * Every inference provider, as DATA so a form can render the full set.
+ *
+ * The Settings form previously hard-coded three of the five, which silently
+ * made "AgentCore Gateway" and "Databricks Model Serving" unreachable from the
+ * UI — including the only provider wired to real execution in lib/databricks.ts.
+ * The API accepted them, so the gap was invisible until someone looked for the
+ * option and could not find it.
+ */
+export const INFERENCE_PROVIDERS = [
+  "Amazon Bedrock",
+  "Anthropic",
+  "OpenAI",
+  "AgentCore Gateway",
+  "Databricks Model Serving",
+] as const satisfies readonly InferenceProvider[];
+
+// `satisfies` above only proves every LISTED value is a real provider. It does
+// NOT prove the reverse, so a provider added to the union and forgotten here
+// would still compile — which is exactly the drift that caused the bug. This
+// does prove the reverse: if anything is missing, `_MissingProvider` is not
+// `never`, the conditional resolves to `never`, and assigning `true` fails.
+type _MissingProvider = Exclude<
+  InferenceProvider,
+  (typeof INFERENCE_PROVIDERS)[number]
+>;
+const _allProvidersListed: _MissingProvider extends never ? true : never = true;
+void _allProvidersListed;
+
+
 export interface CatalogModel {
   id: ID;
   // Friendly catalog name, e.g. "Claude Opus 4.6".
