@@ -147,7 +147,15 @@ export async function GET() {
       name: m.name,
       inferenceProvider: m.inferenceProvider,
     })),
-    tenants: store.tenants.map((t) => ({ id: t.id, tenantName: t.tenantName })),
+    // parentId is REQUIRED by the UI: agent eligibility follows the org tree
+    // (own tenant or an ancestor), and without the parent link the form could
+    // only compare ids for equality — which is why it was hiding agents the
+    // server would have accepted.
+    tenants: store.tenants.map((t) => ({
+      id: t.id,
+      tenantName: t.tenantName,
+      parentId: t.parentId ?? null,
+    })),
     personas: store.personas.map((p) => ({ id: p.id, name: p.name, groups: p.groups })),
   });
 }

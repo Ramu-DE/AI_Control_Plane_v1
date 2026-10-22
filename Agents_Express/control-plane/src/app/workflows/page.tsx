@@ -3,6 +3,10 @@
 import { useEffect, useState } from "react";
 import { PageHeader, Pill, EmptyState, Field, Modal } from "@/components/ui";
 import { getJSON, sendJSON } from "@/lib/api";
+import {
+  agentEligibleForWorkflow,
+  explainNoEligibleAgents,
+} from "@/lib/workflow/eligibility";
 import type { Workflow, WorkflowRun, StepRun, WorkflowStep } from "@/lib/types";
 
 // Shapes the API now returns alongside workflows/runs so this page can BUILD one.
@@ -17,7 +21,7 @@ interface AgentOption {
   knowledgeCount: number;
 }
 interface ModelOption { id: string; name: string; inferenceProvider: string }
-interface TenantOption { id: string; tenantName: string }
+interface TenantOption { id: string; tenantName: string; parentId?: string | null }
 interface PersonaOption { id: string; name: string; groups: string[] }
 interface WorkflowsData {
   workflows: Workflow[];
@@ -554,9 +558,15 @@ function CreateWorkflowModal({
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
-  // Only agents owned by the selected tenant can be bound — the resolver
-  // rejects cross-tenant execution, so do not offer it here either.
-  const eligible = agents.filter((a) => a.tenantId === tenantId);
+  // Eligibility uses the SAME rule as the resolver: the agent's tenant must be
+  // the workflow's tenant or an ANCESTOR of it. Filtering on exact equality (as
+  // this did) hid agents the server would have accepted, and when the default
+  // tenant did not match where the agents lived it showed an empty list with no
+  // explanation.
+  const eligible = agents.filter((a) =>
+    agentEligibleForWorkflow(a.tenantId, tenantId, tenants)
+  );
+  const noAgentsReason = explainNoEligibleAgents(agents, tenantId, tenants);
 
   function patch(i: number, next: Partial<DraftStep>) {
     setSteps((cur) => cur.map((s, idx) => (idx === i ? { ...s, ...next } : s)));
@@ -705,9 +715,8 @@ function CreateWorkflowModal({
                   <Field
                     label="Agent"
                     hint={
-                      eligible.length === 0
-                        ? "No ready agents in this tenant — create one on /agents first."
-                        : "Inherits the agent's model, system prompt, tools and knowledge bases."
+                      noAgentsReason ??
+                      "Inherits the agent's model, system prompt, tools and knowledge bases."
                     }
                   >
                     <select
@@ -715,7 +724,11 @@ function CreateWorkflowModal({
                       value={s.agentId}
                       onChange={(e) => patch(i, { agentId: e.target.value })}
                     >
-                      <option value="">(select an agent)</option>
+                      <option value="">
+                        {eligible.length === 0
+                          ? "(no eligible agent for this tenant)"
+                          : "(select an agent)"}
+                      </option>
                       {eligible.map((a) => (
                         <option key={a.id} value={a.id}>
                           {a.name} — {a.modelRuntimeId}

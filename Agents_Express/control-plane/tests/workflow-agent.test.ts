@@ -23,6 +23,10 @@ import {
   authorizeAgentStep,
 } from "../src/lib/workflow/govern.ts";
 import { store } from "../src/lib/store.ts";
+import {
+  agentEligibleForWorkflow,
+  explainNoEligibleAgents,
+} from "../src/lib/workflow/eligibility.ts";
 import type {
   AgentConfig,
   CatalogModel,
@@ -335,4 +339,86 @@ test("an unknown persona is denied and stage 2 is skipped", () => {
   const a = authorizeAgentStep("agent-expense-assistant", "persona-ghost");
   assert.equal(a.allowed, false);
   assert.equal(a.agentScoped.evaluated, false);
+});
+
+// --------------------------------------------------------------------------- //
+// Agent eligibility — the rule the UI and the resolver must share
+// --------------------------------------------------------------------------- //
+// Reported from the UI: the agent dropdown was empty on the new-workflow page
+// even though ready agents existed. Two causes, both fixed here: the form
+// filtered on exact tenant equality (stricter than the server, which also
+// allows an ANCESTOR's agent), and it gave no reason for an empty list.
+
+const TREE = [
+  { id: "takeda", parentId: null },
+  { id: "fn-supply", parentId: "takeda" },
+  { id: "fn-finance", parentId: "takeda" },
+  { id: "team-a", parentId: "fn-supply" },
+  { id: "acme", parentId: null },
+];
+
+test("a workflow may bind its own tenant's agent, and an ancestor's", () => {
+  assert.equal(agentEligibleForWorkflow("fn-supply", "fn-supply", TREE), true, "same tenant");
+  assert.equal(agentEligibleForWorkflow("takeda", "fn-supply", TREE), true, "parent's agent");
+  assert.equal(agentEligibleForWorkflow("takeda", "team-a", TREE), true, "grandparent's agent");
+});
+
+test("the direction matters: a child's or sibling's agent is NOT eligible", () => {
+  // This is the case that produced the empty dropdown: agents on fn-supply, the
+  // modal defaulted to takeda, and a parent may not reach down.
+  assert.equal(
+    agentEligibleForWorkflow("fn-supply", "takeda", TREE),
+    false,
+    "a parent workflow must not use a division's own agent"
+  );
+  assert.equal(
+    agentEligibleForWorkflow("fn-supply", "fn-finance", TREE),
+    false,
+    "siblings are isolated"
+  );
+  assert.equal(agentEligibleForWorkflow("acme", "takeda", TREE), false, "unrelated org");
+});
+
+test("eligibility matches what the resolver enforces", () => {
+  // If these diverged, the UI would offer an agent the run then refuses, or
+  // hide one it would have accepted. Same function, so they cannot.
+  const resolved = resolveStep(
+    {
+      id: "s1", name: "S", agentId: "a-parent", prompt: "p",
+      toolRefs: [], knowledgeRefs: [], reviewGate: false,
+    },
+    ctx({
+      agents: [agent({ id: "a-parent", tenantId: "takeda", status: "ready" })],
+      tenants: TREE.map((n) => ({ ...n, tenantName: n.id })) as never,
+      workflowTenantId: "fn-supply",
+    }) as never
+  );
+  assert.equal(resolved.agent?.id, "a-parent", "the resolver accepts the ancestor's agent");
+  assert.equal(
+    agentEligibleForWorkflow("takeda", "fn-supply", TREE),
+    true,
+    "and the UI rule agrees"
+  );
+});
+
+test("an empty list explains itself, naming where the agents actually are", () => {
+  const agents = [
+    { name: "Sales agent", tenantId: "fn-supply" },
+    { name: "Supply Chain Agent", tenantId: "fn-supply" },
+  ];
+  const why = explainNoEligibleAgents(agents, "takeda", TREE);
+  assert.ok(why, "an empty dropdown must come with a reason");
+  assert.match(why!, /fn-supply/, "it must say where the agents are");
+  assert.match(why!, /takeda/, "and which tenant was selected");
+  assert.match(why!, /ancestor/, "and state the rule");
+
+  // When agents ARE eligible there is nothing to explain.
+  assert.equal(explainNoEligibleAgents(agents, "fn-supply", TREE), null);
+  // And no agents at all is a different message.
+  assert.match(explainNoEligibleAgents([], "takeda", TREE)!, /No agents are available/);
+});
+
+test("a cycle in the tenant tree terminates", () => {
+  const cyclic = [{ id: "a", parentId: "b" }, { id: "b", parentId: "a" }];
+  assert.equal(agentEligibleForWorkflow("z", "a", cyclic), false);
 });

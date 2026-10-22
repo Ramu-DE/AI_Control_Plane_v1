@@ -12,6 +12,7 @@
 
 import { selectTools } from "../tools/registry";
 import { narrowTools } from "../tools/discover";
+import { agentEligibleForWorkflow, isAncestorTenant } from "./eligibility";
 import type { ToolSpec } from "../tools/registry";
 import type {
   AgentConfig,
@@ -98,7 +99,7 @@ export function resolveStep(step: WorkflowStep, ctx: ResolveContext): ResolvedSt
     }
     // A workflow must not reach across tenants: the agent has to belong to the
     // workflow's tenant (or an ancestor of it, mirroring the org tree).
-    if (agent.tenantId !== ctx.workflowTenantId && !isAncestorTenant(agent.tenantId, ctx.workflowTenantId, ctx.tenants)) {
+    if (!agentEligibleForWorkflow(agent.tenantId, ctx.workflowTenantId, ctx.tenants)) {
       throw new StepResolutionError(
         `agent '${agent.name}' belongs to tenant '${agent.tenantId}' but the workflow runs in ` +
           `'${ctx.workflowTenantId}'; cross-tenant execution is not permitted`
@@ -213,21 +214,9 @@ export function resolveStep(step: WorkflowStep, ctx: ResolveContext): ResolvedSt
   };
 }
 
-/** Walk the tenant tree upward from `from`, looking for `ancestor`. */
-export function isAncestorTenant(
-  ancestor: string,
-  from: string,
-  tenants: Tenant[]
-): boolean {
-  let cursor = tenants.find((t) => t.id === from);
-  const seen = new Set<string>();
-  while (cursor?.parentId && !seen.has(cursor.parentId)) {
-    seen.add(cursor.parentId);
-    if (cursor.parentId === ancestor) return true;
-    cursor = tenants.find((t) => t.id === cursor!.parentId);
-  }
-  return false;
-}
+// `isAncestorTenant` now lives in ./eligibility so the UI can use the same
+// rule. Re-exported because existing callers and tests import it from here.
+export { isAncestorTenant } from "./eligibility";
 
 /** True when any step in a workflow is bound to a registered agent. */
 export function hasAgentBoundStep(steps: WorkflowStep[]): boolean {
