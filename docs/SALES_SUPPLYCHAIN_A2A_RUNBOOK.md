@@ -257,15 +257,35 @@ Cedar `runAgent` check needs a principal.
 different — one agent calls the other **directly**, mid-reasoning, because it
 has hit the edge of what it knows.
 
-### First: do you actually need this?
+### This platform is now an A2A server, not just a client
 
-Both agents in §4 live INSIDE this control plane, so they do not need A2A to
-collaborate — the workflow in §5 already passes each step's findings to the
-next. A2A is for calling an agent that lives **outside** this control plane. If
-your demo is Sales ⇄ Supply Chain within the platform, skip to §7.
+Until recently A2A here was half a feature: the control plane could *call* a
+peer but could not *be* one, so there was nothing to point it at without
+deploying a second service. It now serves both sides of the protocol:
 
-What follows is for showing the A2A governance path, or for a genuinely external
-peer.
+| | |
+|---|---|
+| `GET /.well-known/agent-card.json` | public, unauthenticated by design — a peer must read the card to learn how to authenticate |
+| `POST /api/a2a/rpc` | JSON-RPC 2.0 `message/send`, bearer-authenticated |
+
+Every **ready** agent is advertised as a skill, and **the skill id is the agent
+id** — that is what makes a skill addressable. A `draft` agent is neither
+advertised nor callable.
+
+This gives you a real peer at a real HTTPS address with no new infrastructure,
+which is Option A below.
+
+### What an inbound call is allowed to choose
+
+Only the **skill**. Not the persona, not the model, not the tools:
+
+- the bearer token must match `A2A_INBOUND_TOKEN`, compared in constant time;
+  if that variable is unset the whole inbound path returns 503 — it fails
+  closed rather than accepting unauthenticated invocations on first deploy;
+- the call executes as the persona named by `A2A_INBOUND_PERSONA` and goes
+  through the **same Cedar `runAgent` gate as a workflow step**;
+- tools stay restricted to the agent's approved registry records;
+- the call is audited either way, accepted or refused.
 
 ### Register the peer — UI
 
@@ -279,34 +299,67 @@ link-local — `localhost`, `127.0.0.1`, `10.x`, `192.168.x` and `169.254.x` are
 all refused. That last one is the cloud metadata service, and refusing it is the
 point.
 
-There are then two routes, depending on whether a peer actually exists.
+#### Option A — this deployment as the peer (real execution, recommended)
 
-#### Option A — preview-only (no peer deployed)
+Point the peer at **this control plane's own public URL**. The call leaves over
+HTTPS, is authenticated, is Cedar-checked, and lands on a real Databricks-backed
+agent. Nothing is simulated.
+
+Set two variables on the server before you start it:
+
+```bash
+export A2A_INBOUND_TOKEN="$(openssl rand -hex 24)"   # shared bearer
+export A2A_INBOUND_PERSONA="persona-john"            # who inbound calls run as
+export A2A_SELF_BASE_URL="https://<your-public-host>/proxy/3000"
+```
+
+`A2A_SELF_BASE_URL` matters more than it looks. The card has to advertise the
+address a *caller* can reach, and deriving it from the request got it wrong:
+behind a TLS-terminating CDN, `x-forwarded-proto` is `http`, so the card
+published an `http://` endpoint that an HTTPS-only A2A client correctly refuses.
+The public scheme is a deployment fact, so it is configured rather than guessed.
+When it is set, the two seeded peers point at it automatically with the host
+already allowlisted.
 
 | Field | Value |
 |---|---|
 | Peer id | `supply-chain-agent` |
 | Display name | `Supply Chain Agent` |
-| Owning tenant | your BU |
-| A2A endpoint | `https://REPLACE-ME-supply-chain.internal/` |
-| Allowed hosts | **leave empty** |
-| Auth | `None` |
+| Owning tenant | `fn-supply` |
+| A2A endpoint | `https://<your-public-host>/proxy/3000` |
+| Allowed hosts | `<your-public-host>` |
+| Auth | `Bearer (env var)` → `A2A_INBOUND_TOKEN` |
 
-`REPLACE-ME` is the load-bearing part: the URL validator reports it as a
-placeholder, and registration is allowed without an allowlist. You get the whole
-governance path — Draft, approval, the Cedar scoped policy — without a live
-peer, and Discover/Send report that it is not configured rather than failing
-obscurely.
+Register the **base** URL, not the RPC path. **Discover** fetches the card, and
+the card's `url` is then what sends actually POST to — which is how A2A is meant
+to work, and why Discover is a real step rather than a decorative one.
 
-Note the placeholder text in the endpoint box
-(`https://supply-chain-agent.internal.example.com`) is an EXAMPLE, not a usable
-value. It contains no `REPLACE-ME`, so the platform treats it as live and then
-refuses it for having no allowlist.
+Then **Send**, with the skill set to the agent you want:
 
-#### Option B — a real peer behind a tunnel
+```bash
+TOKEN="$A2A_INBOUND_TOKEN"
+curl -s -X POST "https://<your-public-host>/proxy/3000/api/a2a/rpc" \
+  -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{"jsonrpc":"2.0","id":"sales-req-1","method":"message/send","params":{
+        "message":{"role":"user","contextId":"ctx-ord-1001","parts":[{"kind":"text",
+          "text":"Sales Agent here. ORD-1001 for Meridian Health: 4,000 units of MDX-200 promised 2026-11-07. 1,200 on hand, 10-day lead time for the rest. Can we meet the date?"}]},
+        "metadata":{"skillId":"agent-supply-chain"}}}'
+```
 
-A locally-run peer is on `http://localhost`, which is refused twice over. Put an
-HTTPS tunnel in front of it:
+A real reply, observed end to end in about 2.5 s:
+
+> Verdict: Feasible · Constraint: lead time · Earliest date: 2026-11-01
+> (2026-10-22 + 10 days), which is before the 2026-11-07 promise date.
+
+`metadata.skillId` is **required whenever more than one agent is ready**. The
+server refuses to pick for you: silently choosing would mean an external system
+getting a different agent than it asked for, and the answer would look plausible
+either way.
+
+#### Option B — a separate peer behind a tunnel
+
+Only needed if you want a genuinely *separate* process. A locally-run peer is on
+`http://localhost`, which is refused twice over, so put an HTTPS tunnel in front:
 
 ```bash
 cd a2a-demo && .venv/bin/python src/supply_chain_agent.py   # serves the card
@@ -323,6 +376,25 @@ For a live endpoint the allowlist is **mandatory** and the hostname must match,
 or registration is refused with "a live A2A endpoint must be pinned to an
 allowlist".
 
+#### Option C — preview-only (no peer at all)
+
+| Field | Value |
+|---|---|
+| A2A endpoint | `https://REPLACE-ME-supply-chain.internal/` |
+| Allowed hosts | **leave empty** |
+| Auth | `None` |
+
+`REPLACE-ME` is the load-bearing part: the URL validator reports it as a
+placeholder, and registration is allowed without an allowlist. You get the whole
+governance path — Draft, approval, the Cedar scoped policy — without a live
+peer, and Discover/Send report that it is not configured rather than failing
+obscurely.
+
+Note the placeholder text in the endpoint box
+(`https://supply-chain-agent.internal.example.com`) is an EXAMPLE, not a usable
+value. It contains no `REPLACE-ME`, so the platform treats it as live and then
+refuses it for having no allowlist.
+
 ### What Allowed hosts is for
 
 An egress allowlist, comma- or space-separated. Registering an endpoint does not
@@ -330,10 +402,15 @@ grant the right to reach it — the host must also be pinned. That is what stops
 peer record being edited later to point somewhere internal, and it is the same
 guard that refuses `169.254.169.254`.
 
-Then **Discover** to fetch the card, and **Send** a message to test it.
+It also bounds what **Discover** can do to you. A card is fetched *from* the
+peer, so its `url` is chosen by the peer; sends follow that url, which means an
+unpinned peer could redirect this platform's egress at a host you never
+approved. The allowlist is re-checked against the card's url for exactly that
+reason, and a card pointing off-allowlist is refused rather than silently
+falling back to the registered endpoint.
 
-The card is a trust boundary: only known fields are kept, and anything else the
-peer sends is dropped rather than trusted.
+The card is a trust boundary in the same way: only known fields are kept, and
+anything else the peer sends is dropped rather than trusted.
 
 ### Authorize it — API
 
@@ -508,7 +585,19 @@ called twice.
 - **The workflow runner does not use memory yet.** Recall is a capability the
   platform governs; nothing calls it automatically during a run.
 - **A2A peers must be reachable over HTTPS.** A locally-run peer needs a tunnel,
-  or register it with auth `None` against a local base URL.
-- **State is in memory.** Agents, workflows and records vanish when the dev
-  server restarts. Build your demo data immediately before presenting.
+  or use Option A and point it at this deployment's own public URL.
+- **State is in memory.** Workflows and records vanish when the dev server
+  restarts, and so does anything created through the console — including a
+  catalog model or an agent. Setting an env var requires a restart, so it wipes
+  exactly the data you just built.
+
+  The Sales and Supply Chain agents, their Databricks model, and the two A2A
+  peers are therefore **seeded in code** and come back on every restart. Only
+  what you add on top of them needs rebuilding.
+- **Only one catalog model really executes.** `model-dbx-llama-70b`
+  (`databricks-meta-llama-3-3-70b-instruct`) is provisioned; the seeded Bedrock
+  and AgentCore Gateway entries are illustrative, and an agent bound to one of
+  them fails with "The provided model identifier is invalid." Both scenario
+  agents use the Databricks model for this reason.
 - **No authentication on the control plane.** Anyone with the URL is an admin.
+  Inbound A2A is the exception — it has its own bearer token and fails closed.

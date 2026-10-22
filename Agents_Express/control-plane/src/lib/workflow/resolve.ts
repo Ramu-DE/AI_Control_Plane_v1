@@ -66,12 +66,30 @@ export interface ResolveContext {
  * The agent's system prompt establishes the persona; the step's prompt is the
  * instruction for this stage. Both are kept, in that order, so a governed
  * agent's instructions cannot be silently dropped by a step.
+ *
+ * TODAY'S DATE IS INJECTED, because a model has no clock and these agents are
+ * asked about dates constantly — lead times, promise dates, ETAs. Without it a
+ * supply agent asked "can we hit 2026-11-07 against a 10-day lead time?" has to
+ * invent today in order to answer, and does: observed live, it replied
+ * "2026-11-17, which is 10 days from today" — wrong arithmetic from a guessed
+ * baseline, stated with total confidence. The instruction to say so when a date
+ * is missing is not enough on its own; the date has to actually be there.
+ *
+ * `now` is a parameter so the composition stays pure and testable.
  */
-export function composePrompt(agentSystemPrompt: string, stepPrompt: string): string {
+export function composePrompt(
+  agentSystemPrompt: string,
+  stepPrompt: string,
+  now: Date = new Date()
+): string {
   const a = (agentSystemPrompt || "").trim();
   const s = (stepPrompt || "").trim();
-  if (a && s) return `${a}\n\n${s}`;
-  return a || s;
+  const today = now.toISOString().slice(0, 10);
+  const clock =
+    `Today's date is ${today} (UTC). Use it for any relative date — do not ` +
+    `assume a different one, and show the arithmetic when you compute a date.`;
+  const body = a && s ? `${a}\n\n${s}` : a || s;
+  return body ? `${body}\n\n${clock}` : clock;
 }
 
 /**

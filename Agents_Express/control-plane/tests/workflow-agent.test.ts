@@ -134,8 +134,11 @@ test("agent-bound step inherits model, prompt and runtime", () => {
   assert.equal(r.agent?.id, "a-1");
   assert.equal(r.step.modelId, "m-dbx");
   assert.equal(r.executor, "databricks");
-  // Both prompts are kept, agent persona first.
-  assert.equal(r.step.prompt, "You analyse supplier contracts.\n\nSummarize the spend.");
+  // Both prompts are kept, agent persona first, then the injected date.
+  assert.match(
+    r.step.prompt,
+    /^You analyse supplier contracts\.\n\nSummarize the spend\.\n\nToday's date is \d{4}-\d{2}-\d{2}/
+  );
 });
 
 test("a model-only step behaves exactly as before", () => {
@@ -155,10 +158,14 @@ test("an explicit step model overrides the agent's, and says so", () => {
 });
 
 test("composePrompt keeps whichever half is present", () => {
-  assert.equal(composePrompt("A", "B"), "A\n\nB");
-  assert.equal(composePrompt("", "B"), "B");
-  assert.equal(composePrompt("A", ""), "A");
-  assert.equal(composePrompt("", ""), "");
+  // Date grounding is appended unconditionally — see composePrompt and the
+  // date-grounding cases in a2a-inbound.test.ts — so assert the halves and
+  // their order rather than the whole string.
+  const at = new Date("2026-10-22T00:00:00Z");
+  assert.match(composePrompt("A", "B", at), /^A\n\nB\n\nToday's date is 2026-10-22/);
+  assert.match(composePrompt("", "B", at), /^B\n\nToday's date/);
+  assert.match(composePrompt("A", "", at), /^A\n\nToday's date/);
+  assert.match(composePrompt("", "", at), /^Today's date/);
 });
 
 test("executorFor maps the provider to the execution plane", () => {

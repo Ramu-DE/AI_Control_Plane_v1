@@ -327,6 +327,23 @@ function seed(): Store {
         inferenceApi: "Responses API (/v1/responses)",
         createdAt: iso(1),
       },
+      {
+        // The one catalog model in this seed that REALLY EXECUTES. The Bedrock
+        // and AgentCore Gateway entries above are illustrative: their model
+        // identifiers are not provisioned in every account, so an agent bound
+        // to them fails with "The provided model identifier is invalid."
+        //
+        // This endpoint is a Databricks Foundation Model API, verified live in
+        // this workspace. It exists in the seed because the store is in-memory:
+        // a restart wipes anything created through the console, and a demo that
+        // has to be hand-rebuilt after every restart is not a demo.
+        id: "model-dbx-llama-70b",
+        name: "Llama 3.3 70B Instruct (Databricks)",
+        modelProvider: "Custom: Meta",
+        modelId: "databricks-meta-llama-3-3-70b-instruct",
+        inferenceProvider: "Databricks Model Serving",
+        createdAt: iso(1),
+      },
     ],
     inferenceTargets: [
       {
@@ -376,6 +393,74 @@ function seed(): Store {
         visibility: "public",
         status: "ready",
         createdAt: iso(3),
+      },
+      // ----------------------------------------------------------------- //
+      // The Sales ⇄ Supply Chain scenario, seeded so it survives a restart.
+      //
+      // Both are `ready`, which is what makes them ADDRESSABLE over inbound
+      // A2A: lib/a2a/server.ts advertises only ready agents as skills, and
+      // the skill id is the agent id. Both run on Databricks against the one
+      // model identifier in this catalog that is really provisioned.
+      //
+      // They are deliberately on DIFFERENT tenants — Commercial and Global
+      // Supply & Quality — because a cross-tenant hand-off is the only version
+      // of this scenario where the governance does any work. Same-tenant
+      // agents calling each other would pass every check trivially.
+      // ----------------------------------------------------------------- //
+      {
+        id: "agent-sales-demand",
+        name: "Sales Agent",
+        description:
+          "Commercial demand-and-supply agent. Owns order commitments, customer " +
+          "promise dates, and demand signals; asks Supply Chain for feasibility.",
+        tenantId: "bu-us",
+        modelId: "model-dbx-llama-70b",
+        systemPrompt:
+          "You are the Sales Agent for the U.S. Business Unit. You own customer " +
+          "orders, promised dates, and demand signals.\n\n" +
+          "You do NOT own inventory, production capacity, or logistics — when an " +
+          "answer depends on those, say so explicitly and state what you need " +
+          "from the Supply Chain Agent rather than estimating it yourself.\n\n" +
+          "Be concrete and short. Quote order ids and dates exactly as given. " +
+          "Never invent an inventory level, a lead time, or a shipment status.",
+        memoryRefs: [],
+        toolRefs: [],
+        knowledgeRefs: [],
+        compute: {
+          agentRuntimeId: "databricks-agent-runtime",
+          modelRuntimeId: "databricks-fm-api-pay-per-token",
+        },
+        visibility: "public",
+        status: "ready",
+        createdAt: iso(1),
+      },
+      {
+        id: "agent-supply-chain",
+        name: "Supply Chain Agent",
+        description:
+          "Global Supply & Quality agent. Owns inventory positions, production " +
+          "capacity, lead times and logistics feasibility for a requested date.",
+        tenantId: "fn-supply",
+        modelId: "model-dbx-llama-70b",
+        systemPrompt:
+          "You are the Supply Chain Agent for Global Supply & Quality. You own " +
+          "inventory positions, production capacity, lead times and logistics.\n\n" +
+          "When asked whether a date can be met, answer in this order: (1) the " +
+          "verdict — feasible, feasible with a caveat, or not feasible; (2) the " +
+          "constraint that decides it; (3) the earliest date you can commit to.\n\n" +
+          "You do NOT own the customer relationship or the commercial decision — " +
+          "do not promise anything to a customer. If you have not been given a " +
+          "figure, say it is missing instead of assuming one.",
+        memoryRefs: [],
+        toolRefs: [],
+        knowledgeRefs: [],
+        compute: {
+          agentRuntimeId: "databricks-agent-runtime",
+          modelRuntimeId: "databricks-fm-api-pay-per-token",
+        },
+        visibility: "public",
+        status: "ready",
+        createdAt: iso(1),
       },
     ],
     policies: [

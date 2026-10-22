@@ -136,6 +136,12 @@ export QDRANT_API_KEY=<key>
 # AWS — Bedrock inference, and Verified Permissions if you enable it
 export AWS_REGION=us-west-2
 export AWS_EXECUTION_MODE=local          # set to 'aws' for live AWS calls
+
+# Inbound A2A — lets EXTERNAL agents call this platform's agents.
+# Optional, and off until configured.
+export A2A_INBOUND_TOKEN="$(openssl rand -hex 24)"
+export A2A_INBOUND_PERSONA=persona-john
+export A2A_SELF_BASE_URL=https://<public-host>/proxy/3000
 ```
 
 What each unlocks:
@@ -146,6 +152,24 @@ What each unlocks:
 | `NEO4J_*` | `/kg` and `/graph` read, the KG build write path | graph pages load, queries fail clearly |
 | `QDRANT_*` | `/api/kb/retrieve` | KB retrieval unavailable |
 | `AWS_*` | Bedrock models, Verified Permissions adapter | Bedrock steps fail; local Cedar still works |
+| `A2A_INBOUND_*` | `POST /api/a2a/rpc` — external agents calling in | the endpoint returns 503; outbound A2A still works |
+| `A2A_SELF_BASE_URL` | the public RPC url on the agent card, and the self-pointing seeded peers | the card falls back to request-derived values; the peers stay in `REPLACE-ME` preview mode |
+
+### Inbound A2A, briefly
+
+`GET /.well-known/agent-card.json` is public by design — a peer has to read the
+card to learn how to authenticate. `POST /api/a2a/rpc` is not: it requires the
+bearer token, and **fails closed**, returning 503 while `A2A_INBOUND_TOKEN` is
+unset rather than accepting unauthenticated agent invocations on first deploy.
+
+An inbound caller chooses a *skill* (one per `ready` agent, keyed by agent id)
+and nothing else. The persona comes from `A2A_INBOUND_PERSONA`, the call goes
+through the same Cedar `runAgent` gate as a workflow step, tools stay limited to
+the agent's approved registry records, and every call is audited.
+
+`A2A_SELF_BASE_URL` has to be explicit because request derivation gets it wrong
+behind a TLS-terminating CDN: `x-forwarded-proto` is `http` there, so the card
+advertised an `http://` endpoint that an HTTPS-only A2A client refuses.
 
 Local Cedar authorization — the gate the product actually enforces on agent
 runs, A2A calls and KG builds — needs **no** credentials. `AWS_EXECUTION_MODE`

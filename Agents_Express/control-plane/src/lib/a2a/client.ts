@@ -148,6 +148,32 @@ export interface SendResult {
 }
 
 /**
+ * Which URL a JSON-RPC call actually goes to.
+ *
+ * In A2A the registered address is where a peer is FOUND; the `url` on its
+ * discovered Agent Card is where its RPC endpoint lives, and the two are
+ * normally different — a card at `https://host/.well-known/agent-card.json`
+ * routinely advertises `https://host/api/a2a/rpc`.
+ *
+ * Posting to `peer.endpoint` regardless made discovery decorative and broke
+ * every peer that follows the spec: against this platform's own card it POSTed
+ * to the site root and got HTML back, reported as "returned non-JSON response"
+ * — a confusing transport error for what was really a routing bug.
+ *
+ * THE CARD IS UNTRUSTED INPUT. It is fetched from the peer, so its `url` is
+ * chosen by the peer. It is returned here as a candidate only: the caller
+ * re-runs `validateOutboundUrl` against the peer's own allowlist, so a peer
+ * cannot use its card to redirect this platform's egress at a host the
+ * operator never approved. A card URL on an unapproved host is rejected rather
+ * than silently falling back, because a silent fallback would send the message
+ * somewhere the card said not to.
+ */
+export function rpcTargetFor(peer: A2APeer): string {
+  const fromCard = peer.card?.url?.trim();
+  return fromCard ? fromCard : peer.endpoint;
+}
+
+/**
  * POST a JSON-RPC envelope to a peer and normalize the reply.
  *
  * The caller is responsible for policy evaluation BEFORE invoking this — this
@@ -159,7 +185,8 @@ export async function sendMessage(
   envelope: Record<string, unknown>,
   opts: { timeoutMs?: number } = {}
 ): Promise<SendResult> {
-  const policy = validateOutboundUrl(peer.endpoint, peer.allowedHosts);
+  const target = rpcTargetFor(peer);
+  const policy = validateOutboundUrl(target, peer.allowedHosts);
   if (!policy.ok) {
     throw new A2AConfigError(
       policy.placeholder
@@ -178,7 +205,7 @@ export async function sendMessage(
   const started = Date.now();
   let res: Response;
   try {
-    res = await fetch(peer.endpoint, {
+    res = await fetch(target, {
       method: "POST",
       headers,
       body: JSON.stringify(envelope),

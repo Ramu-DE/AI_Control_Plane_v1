@@ -9,6 +9,7 @@
 // graph control plane, so two concurrent approvals cannot silently clobber.
 
 import { newId } from "../store";
+import { configuredSelfBaseUrl } from "./server";
 import { canTransition } from "./logic";
 import type { RecordStatus } from "../types";
 import type { A2AAgentCard, A2APeer } from "./types";
@@ -37,27 +38,53 @@ function iso(daysAgo = 0): string {
 }
 
 /**
- * Seed peers. Both endpoints are deliberately placeholders, so the platform
- * ships in routing-preview mode: discovery and live sends are refused until a
- * real endpoint and a matching allowlist are configured. Nothing here asserts a
- * capability the deployment does not have.
+ * Where the seeded peers point, and what hosts they may reach.
+ *
+ * REAL EXECUTION, NO NEW INFRASTRUCTURE. A2A needs a peer at a resolvable
+ * HTTPS address, and standing one up is the part of this scenario that usually
+ * stalls. But this platform now serves the A2A protocol itself
+ * (lib/a2a/server.ts), so the most honest peer available is THIS deployment at
+ * its own public URL: discovery fetches a card that really exists, and a send
+ * reaches a real Databricks-backed agent through the real Cedar gate.
+ *
+ * `A2A_SELF_BASE_URL` is read at call time rather than hardcoded, because the
+ * public address is a property of the deployment, not of the code. When it is
+ * unset the endpoints stay `REPLACE-ME` and the platform is in routing-preview
+ * mode: discovery and sends are refused rather than silently pointed at a host
+ * that does not exist. Fail visible, not plausible.
+ */
+function selfRouting(peerId: string): { endpoint: string; allowedHosts: string[] } {
+  const raw = configuredSelfBaseUrl();
+  // Unset or malformed: stay in routing-preview mode rather than pointing at a
+  // host that does not exist.
+  if (!raw) {
+    return { endpoint: `https://REPLACE-ME-${peerId}.example.com`, allowedHosts: [] };
+  }
+  return { endpoint: raw, allowedHosts: [new URL(raw).hostname] };
+}
+
+/**
+ * Seed peers for the Sales ⇄ Supply Chain scenario.
+ *
+ * Auth is `bearer-env` pointing at the SAME env var the inbound server checks,
+ * which is what makes the loopback coherent: the caller presents exactly the
+ * token the callee requires, and neither side stores it.
  */
 function seedPeers(): A2APeer[] {
   const base = {
     card: null,
     owner: "platform-team",
-    allowedHosts: [] as string[],
-    auth: { kind: "none" as const },
+    auth: { kind: "bearer-env" as const, authEnvVar: "A2A_INBOUND_TOKEN" },
   };
   return [
     {
       ...base,
+      ...selfRouting("sales-agent"),
       peerId: "sales-agent",
       displayName: "Sales Agent",
       description:
         "Peer agent owned by Commercial: demand signals and fulfilment planning.",
       tenantId: "bu-us",
-      endpoint: "https://REPLACE-ME-sales-agent.example.com",
       status: "Approved",
       createdAt: iso(2),
       updatedAt: iso(2),
@@ -65,12 +92,12 @@ function seedPeers(): A2APeer[] {
     },
     {
       ...base,
+      ...selfRouting("supply-chain-agent"),
       peerId: "supply-chain-agent",
       displayName: "Supply Chain Agent",
       description:
         "Peer agent owned by Global Supply & Quality: route optimization and ETA.",
       tenantId: "fn-supply",
-      endpoint: "https://REPLACE-ME-supply-chain-agent.example.com",
       // Draft on purpose — demonstrates that an unapproved peer cannot be called.
       status: "Draft",
       createdAt: iso(1),
