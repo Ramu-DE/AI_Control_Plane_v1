@@ -87,6 +87,12 @@ class MappingProposal:
     # RELATIONSHIP: target_table + join describe the relationship.
     target_table: Optional[str] = None
     target_column: Optional[str] = None
+    # RELATIONSHIP only: the table the ontology's rdfs:domain resolved to, i.e.
+    # the SUBJECT side of the edge (`target_table` is the range/object side).
+    # Carried as data rather than recovered from an evidence string, so later
+    # steps — value-overlap profiling in particular — cannot be broken by
+    # rewording a message.
+    domain_table: Optional[str] = None
     join: Optional[JoinMetadata] = None
     # Discovered logical type of the target column (DIRECT proposals only). This
     # is the SINGLE authority for type-dependent planning decisions (SUM/AVG,
@@ -430,7 +436,7 @@ def propose_mappings(
         proposals.append(MappingProposal(
             id=next_id(), kind=ProposalKind.RELATIONSHIP,
             ontology_uri=uri, ontology_label=label, ontology_type="object-property",
-            target_table=right.name, join=join,
+            target_table=right.name, domain_table=left.name, join=join,
             evidence=rel_evidence,
             confidence=conf, validation_issues=issues, source_fingerprint=src_fp,
         ))

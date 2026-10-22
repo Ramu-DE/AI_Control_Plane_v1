@@ -108,3 +108,40 @@ ct:spansRegion a owl:ObjectProperty ;
 ct:recordedAt a rdf:Property ;
     rdfs:label "Recorded At" ;
     rdfs:range xsd:dateTime .
+
+# --- AXIOMS: the ontology's logical content -------------------------------- #
+# These are what make the ontology do work rather than just name things. Each
+# is chosen so the corresponding rule actually FIRES on the demo dataset, and
+# so the inferred triple cannot already be asserted by the mapping.
+
+# No table matches "Study", so `a ct:Study` can only come from entailment.
+ct:Study a owl:Class ;
+    rdfs:label "Study" .
+ct:Trial rdfs:subClassOf ct:Study .
+
+# "name" partially matches site_name / investigator_name, so it is never
+# auto-approved onto a column; ct:name triples can only be inferred.
+ct:name a owl:DatatypeProperty ;
+    rdfs:label "Name" ;
+    rdfs:range xsd:string .
+ct:siteName rdfs:subPropertyOf ct:name .
+ct:investigatorName rdfs:subPropertyOf ct:name .
+
+# Declared with NO domain/range — common in real ontologies, and it means the
+# endpoints cannot be resolved to tables, so the relationship is blocked from
+# publication. The inverse edge therefore exists only by inference.
+ct:hosts a owl:ObjectProperty ;
+    rdfs:label "Hosts" ;
+    owl:inverseOf ct:atSite .
+
+# Transitive, and self-referential so no foreign key can justify it: it stays
+# blocked, which is correct, and transitivity is exercised in a unit test.
+ct:partOfRegion a owl:ObjectProperty, owl:TransitiveProperty ;
+    rdfs:label "Part Of Region" ;
+    rdfs:domain ct:Site ;
+    rdfs:range ct:Site .
+
+# CONSTRAINING axioms: these generate nothing. A breach means the mapping is
+# wrong, so they surface as validation findings instead of entailments.
+ct:Trial owl:disjointWith ct:Site .
+ct:enrolledCount a owl:FunctionalProperty .

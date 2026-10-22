@@ -48,6 +48,12 @@ def main() -> int:
                     help="stand in for a human reviewer and approve what the "
                          "policy deferred (records this name as the approver)")
     ap.add_argument("--json", action="store_true", help="emit the manifest as JSON")
+    ap.add_argument("--profile-joins", action="store_true",
+                    help="measure value overlap for relationships that have no "
+                         "declared foreign key, and use the result as evidence")
+    ap.add_argument("--reason", action="store_true",
+                    help="materialise entailments into <graph>:inferred and "
+                         "validate constraining axioms")
     args = ap.parse_args()
 
     build_id = args.build_id or f"kgb-{os.urandom(4).hex()}"
@@ -90,8 +96,21 @@ def main() -> int:
     if unkeyed:
         print(f"  UNKEYED   : {unkeyed}  (no declared PK -> cannot be materialised)")
 
-    # --- 3. propose + threshold auto-approve ------------------------------- #
+    # --- 3. propose, profile, then threshold auto-approve ------------------ #
     proposals = gu.propose_mappings(discovery, schema)
+
+    if args.profile_joins:
+        measurements = gu.enrich_relationships_with_overlap(proposals, adapter, discovery)
+        usable = [m for m in measurements if m.supports_auto_approval]
+        print(f"profiling   : {len(measurements)} overlap probe(s), "
+              f"{len(usable)} usable as key evidence")
+        for m in measurements:
+            mark = "OK  " if m.supports_auto_approval else "no  "
+            print(f"  {mark}{m.left_table}.{list(m.left_columns)} -> "
+                  f"{m.right_table}.{list(m.right_columns)}: "
+                  f"{m.containment * 100:.1f}% contained, "
+                  f"right unique={m.right_is_unique}, {m.method}")
+
     auto = gu.auto_approve(proposals)
     print(f"proposals   : {len(proposals)}")
     print(f"  auto      : {len(auto.approved)} approved by policy "
@@ -113,7 +132,7 @@ def main() -> int:
           f"set_fingerprint={published.set_fingerprint}")
 
     # --- 5. materialise ---------------------------------------------------- #
-    lines, result = gu.materialize_to_nquads(
+    triples, result = gu.materialize_graph(
         published, adapter,
         build_id=build_id,
         base_uri=args.base_uri,
@@ -122,6 +141,7 @@ def main() -> int:
         table_qualifier=adapter.table_qualifier(),
         dialect=DATABRICKS_DIALECT,
     )
+    lines = gu.serialize_quads(triples, result.graph_uri)
     print(f"\nMATERIALISED: {result.quads} quad(s) into <{result.graph_uri}>")
     print(f"  instances : {result.class_instances}")
     print(f"  literals  : {result.literal_triples}")
@@ -132,6 +152,52 @@ def main() -> int:
     print(f"  complete  : {result.complete}")
     for s in result.skipped:
         print(f"  omitted   : {s.get('code')} — {s.get('message', '')[:120]}")
+
+    # --- 6. reasoning + constraint validation ------------------------------ #
+    entail_report = None
+    violations: list = []
+    if args.reason:
+        axioms = client.list_axioms()
+        declared = sum(len(v) for v in axioms.values())
+        inferred, entail_report = gu.entail(triples, axioms)
+        print(f"\nREASONING   : {declared} axiom(s) read; "
+              f"{entail_report.inferred} triple(s) inferred "
+              f"in {entail_report.iterations} pass(es)")
+        for rule, n in sorted(entail_report.by_rule.items()):
+            print(f"  {rule:24} {n}")
+        if entail_report.skipped_literal_range:
+            print(f"  (skipped {entail_report.skipped_literal_range} literal-range "
+                  f"entailment(s): a literal cannot be a subject)")
+        print(f"  complete  : {entail_report.complete}")
+
+        violations = gu.validate_constraints(triples, axioms, inferred=inferred)
+        if violations:
+            print(f"\nCONSTRAINT VIOLATIONS: {len(violations)} — "
+                  f"these indicate the MAPPING is wrong")
+            for v in violations[:10]:
+                print(f"  {v.code}: {v.subject}\n      {v.message}")
+        else:
+            print("  violations: none — the mapping breaches no declared constraint")
+
+        # Inferred triples go to their OWN graph, never mixed with asserted.
+        lines = lines + gu.serialize_quads(inferred, f"{result.graph_uri}:inferred")
+
+    # --- 7. provenance, in its own graph ----------------------------------- #
+    extra = {}
+    if entail_report:
+        extra = {
+            "inferredGraph": f"{result.graph_uri}:inferred",
+            "inferredCount": str(entail_report.inferred),
+            "entailmentComplete": str(entail_report.complete).lower(),
+            "constraintViolations": str(len(violations)),
+        }
+    prov = gu.provenance_quads(published, result, base_uri=args.base_uri, extra=extra)
+    lines = lines + prov
+    result.provenance_quads = len(prov)
+    result.quads = len(lines)
+    print(f"\nTOTAL       : {len(lines)} quad(s) "
+          f"({result.quads - len(prov) - (entail_report.inferred if entail_report else 0)} asserted, "
+          f"{entail_report.inferred if entail_report else 0} inferred, {len(prov)} provenance)")
 
     if args.out:
         meta = gu.write_nquads(lines, args.out)
@@ -148,6 +214,8 @@ def main() -> int:
         print("\n" + json.dumps({
             "manifest": result.to_dict(),
             "auto_approval": auto.to_dict(),
+            "entailment": entail_report.to_dict() if entail_report else None,
+            "violations": [v.to_dict() for v in violations],
         }, indent=2, default=str))
 
     if not lines:

@@ -614,11 +614,13 @@ def test_provenance_lands_in_a_separate_graph():
 
 
 @test
-def test_drop_graph_removes_data_and_provenance_together():
+def test_drop_graph_removes_every_graph_the_build_owns():
     sparql = gu.drop_graph_sparql("urn:kg:build:x1")
-    check("DROP GRAPH <urn:kg:build:x1>" in sparql, "the data graph must be dropped")
-    check("DROP GRAPH <urn:kg:build:x1:prov>" in sparql,
-          "its provenance graph must be dropped too, or orphans accumulate")
+    for suffix in ("", ":inferred", ":prov"):
+        check(f"DROP GRAPH <urn:kg:build:x1{suffix}>" in sparql,
+              f"the {suffix or 'data'} graph must be dropped, or orphans accumulate")
+    from graph_utility.materialize import build_graphs
+    check(len(build_graphs("g")) == 3, "a build owns exactly three graphs")
 
 
 @test

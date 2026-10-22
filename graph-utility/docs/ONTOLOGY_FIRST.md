@@ -33,11 +33,19 @@ dataset (Unity Catalog)
    ├─ propose_mappings             candidates; ontology rdfs:domain constrains
    │                               which table a property may map to
    │
+   ├─ enrich_..._with_overlap      measure referential containment, so an
+   │                               UNDECLARED foreign key can be justified
+   │
    ├─ auto_approve                 threshold policy: measured evidence only
    │
    ├─ publish_mappings             the existing hard gate (fail-closed)
    │
-   └─ materialize_to_nquads        N-Quads, one named graph per build
+   ├─ materialize_graph            asserted triples -> urn:kg:build:<id>
+   │
+   ├─ entail                       ontology axioms -> urn:kg:build:<id>:inferred
+   ├─ validate_constraints         disjointWith / functional -> findings
+   │
+   └─ serialize_quads              N-Quads
                                       │
                                       └─ S3 ─ Neptune bulk loader
 ```
@@ -51,8 +59,12 @@ python3 integration/build_graph_live.py \
     --ontology tests/fixtures/clinical_ontology.ttl \
     --namespace 'http://example.org/ontology/ct#' \
     --catalog workspace --schema graph_demo \
+    --profile-joins --reason \
     --out /tmp/clinical.nq
 ```
+
+`--profile-joins` measures undeclared foreign keys; `--reason` materialises
+entailments and validates constraining axioms.
 
 `integration/provision_uc_clinical.py` creates a keyed demo schema to run it
 against (composite primary key, many-to-many junction, no universal join key).
@@ -140,19 +152,108 @@ curl -X POST https://<neptune-endpoint>:8182/loader \
 Neptune is VPC-only, so this runs from inside the VPC. Reserve SPARQL
 `INSERT DATA` for small incremental updates; use the loader for volume.
 
+## Reasoning (`reason.py`)
+
+Neptune has no OWL reasoner, so until the ontology's axioms were read they did
+no work: `subClassOf` bought nothing, `inverseOf` left edges one-directional,
+and `disjointWith` could not catch a mapping error.
+
+**Two kinds of axiom, treated differently.** Conflating them is how reasoners
+assert nonsense:
+
+- **Generating** (`subClassOf`, `subPropertyOf`, `domain`, `range`,
+  `inverseOf`, `equivalentClass`/`Property`, `TransitiveProperty`,
+  `SymmetricProperty`) produce triples → `entail()`.
+- **Constraining** (`disjointWith`, `FunctionalProperty`) cannot produce
+  anything; a breach means the **mapping** is wrong → `validate_constraints()`
+  returns findings. Reasoning over them would hide the bug.
+
+**Inferred triples land in `urn:kg:build:<id>:inferred`**, never mixed with
+asserted ones. That is what makes the result auditable: you can tell derived
+from stated, recompute inference with one `DROP GRAPH`, or query asserted-only.
+A build therefore owns three graphs — data, `:inferred`, `:prov` — and
+`drop_graph_sparql` removes all three.
+
+**Deliberately not implemented, with reasons:** `owl:sameAs`/equality closure
+(explodes, and merging identities is dangerous when subject IRIs are minted from
+keys — one error would silently fuse two real entities); class expressions
+(`unionOf`, restrictions); cardinality (it constrains, so it belongs in
+validation).
+
+A literal is **never** made a subject: `siteName rdfs:range xsd:string` plus
+`<s> siteName "North"` would naively yield `"North" a xsd:string`, which is not
+legal RDF. Those are skipped and counted in `skipped_literal_range`.
+
+The fixpoint is capped on iterations and inferred count; hitting either sets
+`complete == False` rather than returning a partial closure silently.
+
+Live run over `workspace.graph_demo`: 34 axioms → 13 inferred triples in 2
+passes (3 `subClassOf`, 6 `subPropertyOf`, 4 `inverseOf`), 0 violations.
+
+## Value-overlap profiling (`overlap.py`)
+
+Most real datasets declare no foreign keys — the `agentexpress_*` tables in this
+workspace have none — so constraint-reading finds no relationships and name
+matching is back to guessing. Profiling asks the data instead: of the distinct
+non-null values of `left.(cols)`, how many exist in `right.(cols)`, and is the
+right side actually unique?
+
+That is a measurement, so it may satisfy the auto-approval gate. **Two things
+must both hold:**
+
+1. **Full containment.** Anything less means orphan rows. Real foreign keys have
+   referential integrity; 98% is a signal this is not the relationship you think
+   it is, and a human should see it.
+2. **The parent key is unique.** Joining to a non-unique column fabricates edges
+   by fan-out, so without uniqueness it is not a foreign key at all.
+
+**Sampling is never treated as proof.** `JoinOverlap.exhaustive` records whether
+the whole relation was examined; a capped probe cannot auto-approve.
+`UnityCatalogDataAdapter.join_overlap` answers in aggregate SQL so it is exact at
+any table size; the generic fallback pulls keys and is exhaustive only under the
+probe limit.
+
+**Verified live.** On `workspace.graph_demo_nofk` (primary keys, no foreign
+keys) the build produces **0 edges** without profiling. With profiling it finds
+3 joins at 100% containment into unique keys and produces **11 edges** — and the
+resulting artifact is **byte-identical** to the build against the schema that
+*does* declare those foreign keys. Profiling recovers exactly the declared-key
+result: no extra edges, none missing.
+
+A tautological probe is refused: a column joined to itself on the same table is
+vacuously 100% contained into a trivially unique key. This was caught in a live
+run, where the self-referential `spansRegion` relationship produced
+`<site/S1> spansRegion <site/S1>` for every row. A genuine self-reference
+(`employee.manager_id -> employee.employee_id`) uses different columns and is
+still probed.
+
 ## Known limits
 
-- **No reasoning.** Neptune has no OWL reasoner, and this reader does none.
-  Entailments must be materialised before ingest — that is the RDFox seam
-  (`docs/RDFOX_assessment.md`), still config-only.
-- **Matching is lexical.** Jaccard token overlap plus declared keys and
-  `rdfs:domain`. No synonym, embedding or LLM-assisted alignment, so an ontology
-  whose terms differ from the dataset's vocabulary will defer most proposals to a
-  human rather than mapping them. That is the correct failure direction, but it
-  is a limit.
+- **Candidate selection is still name-shaped.** Profiling removes the guess from
+  the *verdict*, not from the *search*: `looks_like_identifier` only shortlists
+  columns ending `id|key|code|uuid|guid|number|no|nbr`, so a foreign key called
+  `buyer_ref` or `parent_fk` is never probed at all. Widening the shortlist (or
+  probing every column pair within a budget) is the fix.
+- **Reasoning is an RDFS-plus-safe-OWL subset, batch only.** Re-publishing
+  re-derives the whole closure. RDFox's differentiator is *incremental*
+  materialisation; the rule set here is shaped to port to it
+  (`docs/RDFOX_assessment.md`).
+- **Only the file ontology source reads axioms.** `RdfFileOntologyClient.list_axioms()`
+  exists; there is no matching SPARQL implementation on `NeptuneOntologyClient`
+  yet, so a Neptune-sourced ontology currently drives mapping but not reasoning.
+- **Matching is otherwise lexical.** Jaccard token overlap plus declared keys,
+  measured overlap and `rdfs:domain`. No `skos:altLabel`, embedding or
+  LLM-assisted alignment, so an ontology whose terms differ from the dataset's
+  vocabulary defers most proposals to a human. The right failure direction, but
+  a limit.
 - **`planner.SqlCompiler` still double-quotes identifiers**, so the *query* path
-  would fail on Databricks for the same reason the materialiser did. Unfixed and
-  out of scope here; `materialize.SqlDialect` shows the shape of the fix.
+  would fail on Databricks for the same reason the materialiser did. Unfixed;
+  `materialize.SqlDialect` shows the shape of the fix.
 - **A table with no declared primary key yields no key**, so its class is blocked
-  and nothing is materialised for it. The remedy is to declare the constraint,
-  not to loosen the rule.
+  and nothing is materialised for it. Unlike joins, subject identity is not yet
+  profiled — a `uniqueness-verified` evidence kind (`COUNT(*)` vs
+  `COUNT(DISTINCT col)`) would let an empirically-unique column satisfy the gate
+  honestly. Until then the remedy is to declare the constraint.
+- **The Neptune load step is still unexecuted.** No cluster exists in this
+  account; `drop_graph_sparql` and the loader invocation are emitted but have
+  not been run against a live endpoint.

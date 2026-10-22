@@ -92,7 +92,13 @@ from .ontology_file import (
 from .materialize import (
     MaterializationError,
     MaterializationResult,
+    materialize_graph,
     materialize_to_nquads,
+    provenance_quads,
+    serialize_quads,
+    obj_iri,
+    obj_literal,
+    is_iri,
     write_nquads,
     drop_graph_sparql,
     mint_subject_iri,
@@ -100,6 +106,27 @@ from .materialize import (
     escape_literal,
     iri_segment,
     DEFAULT_GRAPH_PREFIX,
+    ANSI_DIALECT,
+    DATABRICKS_DIALECT,
+    SqlDialect,
+)
+from .overlap import (
+    JoinOverlap,
+    measure_join_overlap,
+    candidate_column_sets,
+    enrich_relationships_with_overlap,
+    MIN_CONTAINMENT_FOR_AUTO,
+    DEFAULT_PROBE_LIMIT,
+)
+from .reason import (
+    EntailmentReport,
+    Violation,
+    entail,
+    prepare_tbox,
+    validate_constraints,
+    RDF_TYPE,
+    DEFAULT_MAX_ITERATIONS,
+    DEFAULT_MAX_INFERRED,
 )
 from .planner import (
     Projection,
@@ -173,9 +200,20 @@ __all__ = [
     # ontology-first ingest + materialisation
     "NeptuneOntologyClient", "make_ontology_client", "RdfFileOntologyClient",
     "OntologyFileError", "infer_format", "is_meta_term",
-    "MaterializationError", "MaterializationResult", "materialize_to_nquads",
+    "MaterializationError", "MaterializationResult", "materialize_graph",
+    "materialize_to_nquads", "provenance_quads", "serialize_quads",
+    "obj_iri", "obj_literal", "is_iri",
     "write_nquads", "drop_graph_sparql", "mint_subject_iri", "typed_literal",
     "escape_literal", "iri_segment", "DEFAULT_GRAPH_PREFIX",
+    "ANSI_DIALECT", "DATABRICKS_DIALECT", "SqlDialect",
+    # value-overlap profiling
+    "JoinOverlap", "measure_join_overlap", "candidate_column_sets",
+    "enrich_relationships_with_overlap", "MIN_CONTAINMENT_FOR_AUTO",
+    "DEFAULT_PROBE_LIMIT",
+    # reasoning + constraint validation
+    "EntailmentReport", "Violation", "entail", "prepare_tbox",
+    "validate_constraints", "RDF_TYPE",
+    "DEFAULT_MAX_ITERATIONS", "DEFAULT_MAX_INFERRED",
     # planner
     "Projection", "Filter", "Aggregation", "JoinPath", "SemanticQueryPlan",
     "CompiledQuery", "SemanticPlanner", "SqlCompiler", "ConceptRef", "AggKind",

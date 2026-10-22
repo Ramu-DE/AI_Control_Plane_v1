@@ -385,6 +385,70 @@ class UnityCatalogDataAdapter(DataAdapter):
         return profiles
 
     # ----------------------------------------------------------------- #
+    # Native value-overlap profiling
+    # ----------------------------------------------------------------- #
+    def join_overlap(
+        self,
+        left_table: str,
+        left_columns: tuple[str, ...],
+        right_table: str,
+        right_columns: tuple[str, ...],
+    ):
+        """Measure referential containment in aggregate SQL — no rows returned.
+
+        The generic fallback in `overlap.py` pulls keys and counts in Python,
+        which stops being exhaustive on a large table and so can never justify
+        auto-approval. Pushing the counting into the warehouse keeps the answer
+        exact at any size, which is the whole point: a sampled containment
+        figure is not a measurement of the relation.
+        """
+        from .overlap import JoinOverlap
+
+        q = DATABRICKS_DIALECT.ident
+        left_fq = f"{q(self.catalog)}.{q(self.schema)}.{q(left_table)}"
+        right_fq = f"{q(self.catalog)}.{q(self.schema)}.{q(right_table)}"
+        left_sel = ", ".join(q(c) for c in left_columns)
+        right_sel = ", ".join(q(c) for c in right_columns)
+        not_null_left = " AND ".join(f"{q(c)} IS NOT NULL" for c in left_columns)
+        not_null_right = " AND ".join(f"{q(c)} IS NOT NULL" for c in right_columns)
+        on = " AND ".join(
+            f"l.{q(l)} = r.{q(r)}" for l, r in zip(left_columns, right_columns)
+        )
+        # First NULL-checked column stands in for "the right row matched".
+        probe_col = q(right_columns[0])
+
+        res = self._sql(
+            f"""WITH l AS (
+                    SELECT DISTINCT {left_sel} FROM {left_fq} WHERE {not_null_left}
+                ), r AS (
+                    SELECT DISTINCT {right_sel} FROM {right_fq} WHERE {not_null_right}
+                )
+                SELECT COUNT(*) AS left_distinct,
+                       SUM(CASE WHEN r.{probe_col} IS NOT NULL THEN 1 ELSE 0 END) AS matched
+                FROM l LEFT JOIN r ON {on}""",
+            limit=1,
+        )
+        row = res.rows[0] if res.rows else {}
+        left_distinct = int(row.get("left_distinct") or 0)
+        matched = int(row.get("matched") or 0)
+
+        res2 = self._sql(
+            f"""SELECT COUNT(*) AS rows_present,
+                       COUNT(DISTINCT {right_sel}) AS distinct_keys
+                FROM {right_fq} WHERE {not_null_right}""",
+            limit=1,
+        )
+        row2 = res2.rows[0] if res2.rows else {}
+        return JoinOverlap(
+            left_table=left_table, left_columns=tuple(left_columns),
+            right_table=right_table, right_columns=tuple(right_columns),
+            left_distinct=left_distinct, matched=matched,
+            right_distinct=int(row2.get("distinct_keys") or 0),
+            right_rows=int(row2.get("rows_present") or 0),
+            exhaustive=True, method="aggregate-sql",
+        )
+
+    # ----------------------------------------------------------------- #
     # Convenience for the materializer
     # ----------------------------------------------------------------- #
     def table_qualifier(self):

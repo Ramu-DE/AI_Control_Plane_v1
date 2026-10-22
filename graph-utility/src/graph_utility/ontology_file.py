@@ -344,5 +344,73 @@ class RdfFileOntologyClient:
             key=lambda r: (r["property"], r["domain"] or "", r["range"] or ""),
         )
 
+    def list_axioms(self) -> dict[str, Any]:
+        """Read the ontology's LOGICAL content, for entailment and validation.
+
+        Classes and properties say what vocabulary exists; axioms say what
+        follows from it. Until something reads these, an ontology is only a
+        naming scheme — `subClassOf` buys nothing, and `disjointWith` cannot
+        catch a mapping error.
+
+        Returns plain data (no rdflib types) so `reason.py` stays stdlib-only
+        and any other ontology source can produce the same shape:
+
+            sub_class_of / sub_property_of / equivalent_class /
+            equivalent_property / inverse_of / domain / range
+                                            -> list[(subject_uri, object_uri)]
+            transitive / symmetric / functional
+                                            -> list[property_uri]
+            disjoint_with                   -> list[(class_uri, class_uri)]
+
+        Blank-node participants are skipped for the same reason as elsewhere:
+        resolving a class expression needs reasoning this reader does not do.
+        """
+        from rdflib import OWL, RDF, RDFS, URIRef
+
+        g = self.graph()
+
+        def pairs(predicate) -> list[tuple[str, str]]:
+            out: set[tuple[str, str]] = set()
+            for s, o in g.subject_objects(predicate):
+                su, ou = self._uri(s), self._uri(o)
+                if su is None or ou is None:
+                    continue
+                # Meta-vocabulary targets are real (e.g. an xsd range) and must
+                # survive, but a meta SUBJECT means we would be redefining the
+                # vocabulary itself, which is never this tenant's intent.
+                if is_meta_term(su):
+                    continue
+                out.add((su, ou))
+            return sorted(out)
+
+        def typed(class_term) -> list[str]:
+            out: set[str] = set()
+            for s in g.subjects(RDF.type, class_term):
+                su = self._uri(s)
+                if su and self._keep(su):
+                    out.add(su)
+            return sorted(out)
+
+        disjoint: set[tuple[str, str]] = set()
+        for s, o in g.subject_objects(OWL.disjointWith):
+            su, ou = self._uri(s), self._uri(o)
+            if su and ou and self._keep(su) and self._keep(ou):
+                # Store one orientation; the checker treats it symmetrically.
+                disjoint.add(tuple(sorted((su, ou))))  # type: ignore[arg-type]
+
+        return {
+            "sub_class_of": pairs(RDFS.subClassOf),
+            "sub_property_of": pairs(RDFS.subPropertyOf),
+            "equivalent_class": pairs(OWL.equivalentClass),
+            "equivalent_property": pairs(OWL.equivalentProperty),
+            "inverse_of": pairs(OWL.inverseOf),
+            "domain": pairs(RDFS.domain),
+            "range": pairs(RDFS.range),
+            "transitive": typed(OWL.TransitiveProperty),
+            "symmetric": typed(OWL.SymmetricProperty),
+            "functional": typed(OWL.FunctionalProperty),
+            "disjoint_with": sorted(disjoint),
+        }
+
     def triple_count(self) -> int:
         return len(self.graph())

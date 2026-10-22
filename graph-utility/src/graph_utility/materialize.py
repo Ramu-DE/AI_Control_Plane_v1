@@ -113,6 +113,43 @@ def iri_term(iri: str) -> str:
     return f"<{iri}>"
 
 
+# --------------------------------------------------------------------------- #
+# Structured triples
+# --------------------------------------------------------------------------- #
+# Triples are carried as data, not as rendered text, because the entailment pass
+# has to pattern-match on them. Serialization is the LAST step, so a reasoner
+# never has to parse strings back apart — which is where subtle corruption would
+# otherwise creep in.
+#
+#   object position: ("iri", "<uri>") or ("lit", '"already rendered"^^<dt>')
+ObjectTerm = tuple[str, str]
+Triple = tuple[str, str, ObjectTerm]
+
+
+def obj_iri(uri: str) -> ObjectTerm:
+    return ("iri", uri)
+
+
+def obj_literal(term: str) -> ObjectTerm:
+    """Wrap an ALREADY-RENDERED literal term (see `typed_literal`)."""
+    return ("lit", term)
+
+
+def is_iri(obj: ObjectTerm) -> bool:
+    return obj[0] == "iri"
+
+
+def render_object(obj: ObjectTerm) -> str:
+    return f"<{obj[1]}>" if obj[0] == "iri" else obj[1]
+
+
+def serialize_quads(triples: Iterable[Triple], graph: str) -> list[str]:
+    """Render triples into sorted N-Quads lines in one named graph."""
+    return sorted(
+        quad(s, p, render_object(o), graph) for (s, p, o) in triples
+    )
+
+
 def _canonical_decimal(text: str) -> tuple[str, str]:
     """Return (lexical, datatype) for a decimal, promoting to double if needed.
 
@@ -309,7 +346,7 @@ def _join_sql(
 # --------------------------------------------------------------------------- #
 # The materializer
 # --------------------------------------------------------------------------- #
-def materialize_to_nquads(
+def materialize_graph(
     published: PublishedMappingSet,
     adapter: DataAdapter,
     *,
@@ -320,15 +357,12 @@ def materialize_to_nquads(
     max_rows_per_table: Optional[int] = None,
     table_qualifier: Optional[Callable[[str], str]] = None,
     dialect: SqlDialect = ANSI_DIALECT,
-    include_provenance: bool = True,
-) -> tuple[list[str], MaterializationResult]:
-    """Turn published mappings into N-Quads lines plus an honest manifest.
+) -> tuple[set[Triple], MaterializationResult]:
+    """Build the ASSERTED triples from published mappings, as structured data.
 
-    Only PUBLISHED mappings are read, so the approval gate is the only way in:
-    this function has no path to an unapproved proposal.
-
-    Returns `(lines, result)`. `lines` is sorted and newline-free; the caller
-    decides where they go (a file, S3, a SPARQL payload).
+    Separated from serialization so the entailment pass can consume triples
+    directly. Only PUBLISHED mappings are read, so the approval gate is the only
+    way in: this function has no path to an unapproved proposal.
     """
     graph = graph_uri or f"{DEFAULT_GRAPH_PREFIX}{build_id}"
     result = MaterializationResult(
@@ -339,7 +373,7 @@ def materialize_to_nquads(
         source_fingerprint=published.source_fingerprint,
         built_at=datetime.now(timezone.utc).isoformat(),
     )
-    quads: set[str] = set()
+    triples: set[Triple] = set()
 
     # ---- direct mappings, grouped per table ---- #
     by_table: dict[str, list[PublishedMapping]] = {}
@@ -396,7 +430,7 @@ def materialize_to_nquads(
                 result.rows_skipped_null_key += 1
                 continue
             subject = mint_subject_iri(base_uri, table, key_values)
-            quads.add(quad(subject, RDF_TYPE, iri_term(cls.ontology_uri), graph))
+            triples.add((subject, RDF_TYPE, obj_iri(cls.ontology_uri)))
             result.class_instances += 1
             emitted_here += 1
             for offset, m in enumerate(mappings):
@@ -405,7 +439,7 @@ def materialize_to_nquads(
                     result.null_values_skipped += 1
                     continue
                 lt = LogicalType.coerce(m.logical_type)
-                quads.add(quad(subject, m.ontology_uri, typed_literal(value, lt), graph))
+                triples.add((subject, m.ontology_uri, obj_literal(typed_literal(value, lt))))
                 result.literal_triples += 1
         result.per_table[table] = emitted_here
 
@@ -473,30 +507,70 @@ def materialize_to_nquads(
             drive_iri = mint_subject_iri(base_uri, drive, dv)
             other_iri = mint_subject_iri(base_uri, other, ov)
             subject, obj = (drive_iri, other_iri) if drive_is_left else (other_iri, drive_iri)
-            quads.add(quad(subject, m.ontology_uri, iri_term(obj), graph))
+            triples.add((subject, m.ontology_uri, obj_iri(obj)))
             result.relationship_triples += 1
 
-    lines = sorted(quads)
+    result.quads = len(triples)
+    return triples, result
 
-    # ---- provenance, in its own graph so it never pollutes the data ---- #
+
+def provenance_quads(
+    published: PublishedMappingSet,
+    result: MaterializationResult,
+    *,
+    base_uri: str = "http://graph-utility/resource/",
+    extra: Optional[dict[str, str]] = None,
+) -> list[str]:
+    """Build-level provenance, in its own graph so it never pollutes the data."""
+    graph = result.graph_uri
+    prov_graph = f"{graph}:prov"
+    build_iri = f"{base_uri}build/{iri_segment(result.build_id)}"
+    lines = [
+        quad(build_iri, PROV_NS + "generatedAtTime",
+             f'"{escape_literal(result.built_at)}"^^<{XSD_NS}dateTime>', prov_graph),
+        quad(build_iri, f"{base_uri}vocab/setFingerprint",
+             f'"{escape_literal(published.set_fingerprint)}"', prov_graph),
+        quad(build_iri, f"{base_uri}vocab/sourceFingerprint",
+             f'"{escape_literal(published.source_fingerprint)}"', prov_graph),
+        quad(build_iri, f"{base_uri}vocab/sourceId",
+             f'"{escape_literal(published.source_id)}"', prov_graph),
+        quad(build_iri, f"{base_uri}vocab/dataGraph", iri_term(graph), prov_graph),
+    ]
+    for pred, value in sorted((extra or {}).items()):
+        lines.append(quad(build_iri, f"{base_uri}vocab/{pred}",
+                          f'"{escape_literal(value)}"', prov_graph))
+    return sorted(set(lines))
+
+
+def materialize_to_nquads(
+    published: PublishedMappingSet,
+    adapter: DataAdapter,
+    *,
+    build_id: str,
+    base_uri: str = "http://graph-utility/resource/",
+    graph_uri: Optional[str] = None,
+    strict: bool = True,
+    max_rows_per_table: Optional[int] = None,
+    table_qualifier: Optional[Callable[[str], str]] = None,
+    dialect: SqlDialect = ANSI_DIALECT,
+    include_provenance: bool = True,
+) -> tuple[list[str], MaterializationResult]:
+    """Build and serialize in one step: published mappings -> N-Quads lines.
+
+    Returns `(lines, result)`. `lines` is sorted and newline-free; the caller
+    decides where they go (a file, S3, a SPARQL payload).
+    """
+    triples, result = materialize_graph(
+        published, adapter, build_id=build_id, base_uri=base_uri,
+        graph_uri=graph_uri, strict=strict,
+        max_rows_per_table=max_rows_per_table,
+        table_qualifier=table_qualifier, dialect=dialect,
+    )
+    lines = serialize_quads(triples, result.graph_uri)
     if include_provenance:
-        prov_graph = f"{graph}:prov"
-        build_iri = f"{base_uri}build/{iri_segment(build_id)}"
-        prov = [
-            quad(build_iri, PROV_NS + "generatedAtTime",
-                 f'"{escape_literal(result.built_at)}"^^<{XSD_NS}dateTime>', prov_graph),
-            quad(build_iri, f"{base_uri}vocab/setFingerprint",
-                 f'"{escape_literal(published.set_fingerprint)}"', prov_graph),
-            quad(build_iri, f"{base_uri}vocab/sourceFingerprint",
-                 f'"{escape_literal(published.source_fingerprint)}"', prov_graph),
-            quad(build_iri, f"{base_uri}vocab/sourceId",
-                 f'"{escape_literal(published.source_id)}"', prov_graph),
-            quad(build_iri, f"{base_uri}vocab/dataGraph", iri_term(graph), prov_graph),
-        ]
-        prov = sorted(set(prov))
+        prov = provenance_quads(published, result, base_uri=base_uri)
         result.provenance_quads = len(prov)
         lines = lines + prov
-
     result.quads = len(lines)
     return lines, result
 
@@ -527,10 +601,22 @@ def write_nquads(lines: list[str], path: str) -> dict[str, Any]:
     }
 
 
+#: Suffixes of the graphs a build owns, besides the data graph itself.
+BUILD_GRAPH_SUFFIXES = (":inferred", ":prov")
+
+
+def build_graphs(graph_uri: str) -> list[str]:
+    """Every named graph one build owns: data, entailments, provenance."""
+    return [graph_uri] + [f"{graph_uri}{s}" for s in BUILD_GRAPH_SUFFIXES]
+
+
 def drop_graph_sparql(graph_uri: str) -> str:
-    """The SPARQL UPDATE that removes one build, data and provenance.
+    """The SPARQL UPDATE that removes one build COMPLETELY.
 
     Teardown is exact because the build owns its graphs: no node-by-node
-    matching, and no risk of deleting another build's statements.
+    matching, and no risk of deleting another build's statements. All three
+    graphs must go — leaving `:inferred` or `:prov` behind would orphan
+    statements that refer to data no longer present, which is precisely the
+    accumulation problem the per-build graph exists to prevent.
     """
-    return f"DROP GRAPH <{graph_uri}>; DROP GRAPH <{graph_uri}:prov>"
+    return "; ".join(f"DROP GRAPH <{g}>" for g in build_graphs(graph_uri))
