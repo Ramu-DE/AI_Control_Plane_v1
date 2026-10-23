@@ -413,7 +413,7 @@ export async function POST(req: NextRequest) {
       run.status = "denied";
       run.updatedAt = new Date().toISOString();
     }
-    logAudit({ category: "agent", action: "workflow-gate", actor: "Workshop Admin", detail: `${body.decision.toUpperCase()} at '${sr.name}' in run of '${run.workflowName}'` });
+    logAudit({ category: "agent", action: "workflow-gate", actor: "Workshop Admin", tenantId: run.tenantId, detail: `${body.decision.toUpperCase()} at '${sr.name}' in run of '${run.workflowName}'` });
     return NextResponse.json(run);
   }
 
@@ -445,6 +445,7 @@ export async function POST(req: NextRequest) {
       category: "agent",
       action: "workflow-resume",
       actor: run.personaId ?? "console-user",
+      tenantId: run.tenantId,
       detail:
         `Resumed interrupted run of '${run.workflowName}' from step ` +
         `${plan.fromStep + 1} ('${target.name}')`,

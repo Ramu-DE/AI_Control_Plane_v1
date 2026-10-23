@@ -12,6 +12,7 @@
 import { getTierConfig } from "./tiers";
 import type {
   AgentConfig,
+  AuditEvent,
   RegistryRecord,
   Tenant,
   TierConfig,
@@ -227,4 +228,151 @@ export function describeTenant(tenant: Tenant, input: UsageInputs) {
   const config = getTierConfig(tenant.tier);
   const usage = tenantUsage(tenant.id, input);
   return { usage, config };
+}
+
+// --------------------------------------------------------------------------- //
+// Tenant scope — the shared subtree rules
+// --------------------------------------------------------------------------- //
+//
+// Our tenancy is a TREE, not a flat list, and that is what makes a "bridged"
+// isolation tier expressible: a rule set at the org applies to every
+// descendant unless one overrides it.
+//
+// The cost is that every tenant-aware check has to handle subtree semantics,
+// and for a long time only two did — `tenantInSubtree` for memory and
+// `isAncestorTenant` for workflow eligibility. Audit visibility, Cedar
+// evaluation and registry attachment each needed the same rule, so it lives
+// here once rather than being re-derived three more times with three chances
+// to get the direction backwards.
+
+/** `tenantId` then each ancestor, root last. Cycle-safe. */
+export function tenantChain(tenantId: string, tenants: Tenant[]): string[] {
+  const byId = new Map(tenants.map((t) => [t.id, t]));
+  const out: string[] = [];
+  const seen = new Set<string>();
+  let cursor = byId.get(tenantId);
+  while (cursor && !seen.has(cursor.id)) {
+    seen.add(cursor.id);
+    out.push(cursor.id);
+    cursor = cursor.parentId ? byId.get(cursor.parentId) : undefined;
+  }
+  return out;
+}
+
+/**
+ * Is `candidate` `root` itself, or anywhere beneath it?
+ *
+ * Reflexive on purpose: a tenant is in its own subtree. The alternative makes
+ * every caller write `id === root || inSubtree(...)`, and the one that forgets
+ * denies a tenant access to its own resources.
+ */
+export function inTenantSubtree(
+  candidate: string,
+  root: string,
+  tenants: Tenant[]
+): boolean {
+  if (candidate === root) return true;
+  return tenantChain(candidate, tenants).includes(root);
+}
+
+/** The tenant plus every descendant — what a parent may legitimately see. */
+export function visibleTenantIds(rootId: string, tenants: Tenant[]): string[] {
+  return [rootId, ...descendantIds(tenants, rootId)];
+}
+
+/**
+ * May a tenant use this resource, given the resource's owning tenant?
+ *
+ * `undefined` owner means PLATFORM-PROVIDED and is available to everyone —
+ * the shared half of "a platform offers shared tools while tenants onboard
+ * their own". A resource owned by an ANCESTOR is also available, which is the
+ * bridged case: the org publishes a tool once and every BU inherits it.
+ *
+ * What is refused is the sideways case — a sibling BU's resource — and that is
+ * the one that matters, because nothing about the current flat registry would
+ * otherwise prevent it.
+ */
+export function resourceAvailableToTenant(
+  resourceTenantId: string | null | undefined,
+  tenantId: string,
+  tenants: Tenant[]
+): { allowed: boolean; reason: string } {
+  if (resourceTenantId === null || resourceTenantId === undefined) {
+    return { allowed: true, reason: "platform-provided (available to every tenant)" };
+  }
+  if (resourceTenantId === tenantId) {
+    return { allowed: true, reason: `owned by '${tenantId}'` };
+  }
+  if (inTenantSubtree(tenantId, resourceTenantId, tenants)) {
+    return {
+      allowed: true,
+      reason: `inherited from ancestor tenant '${resourceTenantId}'`,
+    };
+  }
+  return {
+    allowed: false,
+    reason:
+      `owned by tenant '${resourceTenantId}', which is neither '${tenantId}' ` +
+      `nor one of its ancestors`,
+  };
+}
+
+// --------------------------------------------------------------------------- //
+// Tenant-scoped telemetry
+// --------------------------------------------------------------------------- //
+
+export interface AuditScopeResult {
+  events: AuditEvent[];
+  /** Tenants whose events are included — the subtree that was expanded. */
+  includedTenantIds: string[];
+  /** Entries with no tenant at all, counted rather than silently dropped. */
+  platformEvents: number;
+}
+
+/**
+ * The audit events one tenant may see: its own plus its descendants'.
+ *
+ * A parent seeing its children's activity is the point of the tree — it is how
+ * a BU lead gets oversight of their sub-units without being handed the whole
+ * org's log. The sideways case is excluded.
+ *
+ * `includePlatform` governs the untenanted entries (policy edits, catalog
+ * changes). They are NOT tenant data, so they are off by default; a platform
+ * admin asks for them explicitly. Either way the count is reported, because a
+ * log that silently omits entries is worse than one that says it did.
+ */
+export function filterAuditForTenant(
+  events: AuditEvent[],
+  tenantId: string,
+  tenants: Tenant[],
+  opts: { includePlatform?: boolean } = {}
+): AuditScopeResult {
+  const visible = new Set(visibleTenantIds(tenantId, tenants));
+  const out: AuditEvent[] = [];
+  let platformEvents = 0;
+  for (const e of events) {
+    if (e.tenantId === undefined || e.tenantId === null) {
+      platformEvents += 1;
+      if (opts.includePlatform) out.push(e);
+      continue;
+    }
+    if (visible.has(e.tenantId)) out.push(e);
+  }
+  return { events: out, includedTenantIds: [...visible], platformEvents };
+}
+
+/** Per-tenant token totals from run records — the basis of cost attribution. */
+export function usageByTenant(
+  runs: Workflow[] | { tenantId: string; totalTokens?: number; totalCostUsd?: number }[]
+): Record<string, { tokens: number; costUsd: number; runs: number }> {
+  const out: Record<string, { tokens: number; costUsd: number; runs: number }> = {};
+  for (const r of runs as { tenantId: string; totalTokens?: number; totalCostUsd?: number }[]) {
+    if (!r.tenantId) continue;
+    const row = out[r.tenantId] ?? { tokens: 0, costUsd: 0, runs: 0 };
+    row.tokens += r.totalTokens ?? 0;
+    row.costUsd += r.totalCostUsd ?? 0;
+    row.runs += 1;
+    out[r.tenantId] = row;
+  }
+  return out;
 }

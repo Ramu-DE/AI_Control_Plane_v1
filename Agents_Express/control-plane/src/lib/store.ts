@@ -1171,6 +1171,8 @@ export function newId(prefix: string): string {
 export function logAudit(
   event: Omit<AuditEvent, "id" | "at">
 ): AuditEvent {
+  // `tenantId` rides along when the caller knows it. Not required: a policy
+  // edit or a catalog change is genuinely platform-level.
   const evt: AuditEvent = { ...event, id: newId("evt"), at: new Date().toISOString() };
   store.audit.unshift(evt);
   const dropped = capLog(store.audit, MAX_AUDIT_ENTRIES);

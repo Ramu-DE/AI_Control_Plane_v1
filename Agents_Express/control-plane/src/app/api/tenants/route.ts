@@ -106,6 +106,7 @@ export async function POST(req: NextRequest) {
     category: "model",
     action: "tenant-create",
     actor: "platform-admin",
+    tenantId: tenant.id,
     detail: `Onboarded tenant '${tenant.tenantName}' (${planLabel(tier)} plan, ${isolation})`,
   });
   const config: TierConfig = getTierConfig(tier);

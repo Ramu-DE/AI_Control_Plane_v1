@@ -260,6 +260,44 @@ The dev server reads the environment at **startup**, so export before
 
 ---
 
+## 3b. Multi-tenancy: what is pooled, bridged, or siloed
+
+Tenancy here is a **tree** (org → BUs → sub-units), which is what makes a
+"bridged" tier expressible: a rule set at the org applies to every descendant
+unless one overrides it. The subtree rule lives once in `lib/tenancy.ts` —
+`inTenantSubtree`, `visibleTenantIds`, `resourceAvailableToTenant`.
+
+| Dimension | Pattern | How |
+|---|---|---|
+| Memory | **siloed** | actor key is `tenant__persona`; reads authorized against the tenant subtree |
+| Models | **bridged** | shared catalog, per-tenant `allowedModelIds`, inherited down the tree |
+| Tools / registry | **bridged** | `RegistryRecord.tenantId`; absent = platform-provided and available to all |
+| Agents | **bridged** | `tenantId` + tier limits + cross-tenant eligibility checks |
+| Telemetry | **bridged** | `AuditEvent.tenantId`; `GET /api/audit?tenant=<id>` returns the subtree |
+| Authorization | **bridged** | `resource.tenant == "<id>"` in Cedar, matching the tenant *and its descendants* |
+| Runtime, gateway | pooled | one process; `compute.agentRuntimeId` declares intent but does not provision |
+| Data plane | pooled | one credential; `DATABRICKS_UC_ALLOWED_SCOPES` bounds the platform, **not** per tenant |
+
+Three rules worth knowing because they are easy to get backwards:
+
+- **A platform-provided resource (no `tenantId`) is available to everyone.**
+  That is the shared half of "a platform offers common tools while tenants
+  onboard their own", and it keeps every pre-existing record working.
+- **An ancestor's resource is inherited; a sibling's is refused.** The sideways
+  case is the one nothing previously prevented.
+- **A descendant's resource does NOT flow upward.** A sub-unit's private tool
+  is not the parent's to use — isolation is not the same as hierarchy.
+
+Telemetry: untenanted platform events (a policy edit, a catalog change) are
+excluded from a tenant-scoped query by default and **counted** in
+`platformEventsExcluded`, because a log that silently omits entries is worse
+than one that admits it. `GET /api/audit?usage=1` rolls up tokens and cost per
+tenant for attribution.
+
+Known gaps against the framework, in priority order: per-tenant UC scopes
+(today's allowlist is platform-wide), a `residency` attribute on `Tenant`, and
+tenant-scoped personas / per-tenant identity providers.
+
 ## 4. Checking it works
 
 With the control plane running and Databricks exported:

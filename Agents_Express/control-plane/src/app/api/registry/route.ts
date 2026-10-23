@@ -89,6 +89,16 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
     }
+    if (body.tenantId && !store.tenants.some((t) => t.id === body.tenantId)) {
+      return NextResponse.json(
+        {
+          error:
+            `tenantId '${body.tenantId}' is not a known tenant. Omit it for a ` +
+            `platform-provided record available to every tenant.`,
+        },
+        { status: 400 }
+      );
+    }
     const registry = store.registries.find((r) => r.id === body.registryId);
     if (!registry) {
       return NextResponse.json(
@@ -157,6 +167,10 @@ export async function POST(req: NextRequest) {
       memoryConfig: body.memoryConfig,
       tools,
       owner: body.owner ?? "console-user",
+      // Tenant-onboarded when supplied; PLATFORM-PROVIDED when absent, which
+      // keeps every existing record available to everyone. Validated so an
+      // unknown tenant cannot create a record nobody can ever attach.
+      ...(body.tenantId ? { tenantId: body.tenantId } : {}),
       createdAt: new Date().toISOString(),
     };
     store.records.unshift(record);

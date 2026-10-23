@@ -259,7 +259,24 @@ export interface RegistryRecord {
   memoryConfig?: MemoryRecordConfig;
   // Convenience: the flat list of tool names exposed by this record.
   tools: string[];
+  /**
+   * Who registered it — a PERSON or a team (`console-user`, `platform-team`,
+   * `finance-platform`). NOT a tenant id, which is why `tenantId` below had to
+   * be added separately rather than reusing this.
+   */
   owner: string;
+  /**
+   * The tenant that owns this record, or undefined for PLATFORM-PROVIDED.
+   *
+   * This is the shared-vs-tenant-onboarded distinction: a platform offers
+   * common tools while tenants bring their own. Until now the registry had no
+   * tenant dimension at all, so the two were indistinguishable and nothing
+   * stopped one BU attaching a sibling BU's tool.
+   *
+   * Undefined means available to everyone, which keeps every existing record
+   * working exactly as before. See `resourceAvailableToTenant`.
+   */
+  tenantId?: ID;
   createdAt: string;
 }
 
@@ -480,6 +497,19 @@ export interface EvaluationRequest {
   resource?: string;
   // Optional numeric context for resource-based conditions (e.g. expense amount).
   amount?: string;
+  /**
+   * The tenant this request acts within — normally the bound agent's tenant.
+   *
+   * Authorization had no tenant dimension at all: decisions were persona +
+   * agent + tool. A tenant could only be smuggled into a resource STRING
+   * (`Tool::"a2a:sales-agent"`), which works but is a convention a policy
+   * author can forget, and nothing caught the omission.
+   *
+   * With this, a policy can say `when { resource.tenant == "bu-us" }` and a
+   * tenant-scoped rule stops applying to anyone else's agents by
+   * construction. Optional, so every existing policy keeps its meaning.
+   */
+  tenantId?: ID;
 }
 
 export interface LayerDecision {
@@ -591,6 +621,19 @@ export interface AuditEvent {
   actor: string;
   detail: string;
   at: string;
+  /**
+   * The tenant this event belongs to, when one applies.
+   *
+   * Optional because platform-level events (a policy edit, a model added to
+   * the catalog) genuinely have no tenant, and because entries written before
+   * this field existed have none — backfilling a guess would be worse than a
+   * null, since the whole point is attribution.
+   *
+   * Without this, "show me BU-Japan's activity" and "what did Oncology spend"
+   * were unanswerable: the tenant appeared only inside `detail`, which is a
+   * log line, not a queryable dimension. See `filterAuditForTenant`.
+   */
+  tenantId?: ID;
 }
 
 

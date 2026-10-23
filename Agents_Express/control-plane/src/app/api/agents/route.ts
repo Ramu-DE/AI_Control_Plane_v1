@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { store, newId, logAudit } from "@/lib/store";
 import { planeMismatch } from "@/lib/plane";
 import { getTierConfig, planLabel } from "@/lib/tiers";
+import { resourceAvailableToTenant } from "@/lib/tenancy";
 import { AgentConfig } from "@/lib/types";
 import { defaultAgentCompute, isAgentCompute } from "@/lib/runtimes";
 import type { InferenceProvider } from "@/lib/types";
@@ -79,6 +80,31 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // TENANT OWNERSHIP, checked for every kind of attachment below.
+  //
+  // Approval governs WHAT exists; it said nothing about WHOSE it is. With the
+  // registry now carrying a tenant, a platform-provided record stays available
+  // to everyone and an ancestor's record is inherited, but a SIBLING BU's
+  // record is refused — the case nothing previously prevented.
+  const crossTenant = (ids: string[], kind: string) => {
+    for (const id of ids) {
+      const rec = store.records.find((r) => r.id === id);
+      if (!rec) continue; // already reported as not-approved above
+      const verdict = resourceAvailableToTenant(rec.tenantId, tenant.id, store.tenants);
+      if (!verdict.allowed) {
+        return (
+          `${kind} '${rec.name}' is not available to '${tenant.tenantName}': ` +
+          verdict.reason
+        );
+      }
+    }
+    return null;
+  };
+  const toolOwnership = crossTenant(toolRefs, "Tool");
+  if (toolOwnership) {
+    return NextResponse.json({ error: toolOwnership }, { status: 403 });
+  }
+
   // Knowledge Bases: approved-only + tier limit (maxKnowledgeBases).
   const knowledgeRefs = body.knowledgeRefs ?? [];
   if (knowledgeRefs.length > tier.maxKnowledgeBases) {
@@ -115,6 +141,15 @@ export async function POST(req: NextRequest) {
       },
       { status: 400 }
     );
+  }
+
+  const kbOwnership = crossTenant(knowledgeRefs, "Knowledge base");
+  if (kbOwnership) {
+    return NextResponse.json({ error: kbOwnership }, { status: 403 });
+  }
+  const memOwnership = crossTenant(memoryRefs, "Memory");
+  if (memOwnership) {
+    return NextResponse.json({ error: memOwnership }, { status: 403 });
   }
 
   const kbNotApproved = knowledgeRefs.filter((id) => {
@@ -179,6 +214,7 @@ export async function POST(req: NextRequest) {
     category: "agent",
     action: "create",
     actor: "console-user",
+    tenantId: tenant.id,
     detail: `Created agent '${agent.name}' in ${tenant.tenantName} (${agent.visibility})`,
   });
   return NextResponse.json(agent, { status: 201 });

@@ -9,6 +9,7 @@
 // results. Replace with the real Cedar engine / AVP when wiring to AWS.
 
 import { store } from "./store";
+import { inTenantSubtree } from "./tenancy";
 // Type-only import — see the note in store.ts.
 import type {
   EvaluationRequest,
@@ -44,6 +45,15 @@ function parseConditions(body: string): Condition[] {
     const value = raw.startsWith('"') ? m[4] : Number(raw);
     conds.push({ attr, op, value });
   }
+  // `resource.tenant == "<id>"` — the tenant dimension. Parsed separately
+  // from the principal.* form above because it reads off the REQUEST, not off
+  // the persona: personas are platform-wide, so a tenant claim on a persona
+  // would be a different (and currently unsupported) statement.
+  const tenantRe = /resource\.tenant\s*==\s*"([^"]*)"/g;
+  let tm: RegExpExecArray | null;
+  while ((tm = tenantRe.exec(body)) !== null) {
+    conds.push({ attr: "__tenant__", op: "==", value: tm[1] });
+  }
   // also support resource.amount <= principal.approvalLimit (cross-ref)
   const cross = /resource\.(\w+)\s*(<=|>=|<|>|==)\s*principal\.(\w+)/.exec(body);
   if (cross) {
@@ -78,6 +88,21 @@ function conditionsHold(
   req: EvaluationRequest
 ): boolean {
   for (const c of parsed.conditions) {
+    if (c.attr === "__tenant__") {
+      // A tenant-scoped policy applies to that tenant AND its descendants:
+      // an org-level rule is meant to cover the BUs beneath it. Exact-match
+      // only would make every parent policy need restating per sub-unit, and
+      // the one nobody restates is the hole.
+      if (!req.tenantId) return false;   // fail closed: no tenant, no match
+      const target = String(c.value);
+      if (
+        req.tenantId !== target &&
+        !inTenantSubtree(req.tenantId, target, store.tenants)
+      ) {
+        return false;
+      }
+      continue;
+    }
     if (c.attr.startsWith("__cross__")) {
       // resource.<x> <op> principal.<y> — demo uses amount vs approvalLimit.
       const [, spec] = c.attr.split("__cross__");

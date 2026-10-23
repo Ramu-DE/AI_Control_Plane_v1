@@ -75,6 +75,7 @@ export function authorize(modelId: string, ctx: BrokerContext): ModelDecision {
       category: "model",
       action: "invoke-denied",
       actor: ctx.personaId,
+      tenantId: ctx.tenantId,
       detail:
         `DENY ${ctx.origin} model call: ${decision.reason}` +
         (ctx.agentId ? ` (agent ${ctx.agentId})` : ""),
@@ -156,6 +157,7 @@ export async function invokeStep(
     category: "model",
     action: "invoke",
     actor: ctx.personaId,
+    tenantId: ctx.tenantId,
     detail:
       `${ctx.origin} invoked '${model.name}' on ${executor} for tenant ` +
       `'${ctx.tenantId}': ${toolCallCount} tool call(s), ${totalTokens} token(s), ` +

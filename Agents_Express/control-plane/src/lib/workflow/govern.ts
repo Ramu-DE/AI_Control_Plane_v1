@@ -58,12 +58,17 @@ export interface StepAuthorization {
  * model, not three.
  */
 export function authorizeAgentStep(agentId: string, personaId: string): StepAuthorization {
+  // The agent's tenant IS this request's tenant, so a tenant-scoped policy
+  // can govern who runs whose agents without encoding the tenant in a
+  // resource string.
+  const agentTenantId = store.agents.find((a) => a.id === agentId)?.tenantId;
   const base = evaluate({
     personaId,
     agentId,
     action: RUN_AGENT_ACTION,
     tool: WORKFLOW_PERIMETER_TOOL,
     resource: agentId,
+    ...(agentTenantId ? { tenantId: agentTenantId } : {}),
   });
   const pd = base.decisions[0];
   const perimeter = {
@@ -100,6 +105,9 @@ export function authorizeAgentStep(agentId: string, personaId: string): StepAuth
     action: RUN_AGENT_ACTION,
     tool: agentScopedTool(agentId),
     resource: agentId,
+    // Both stages carry the tenant, or stage 2 could permit what stage 1's
+    // tenant rule refused — the asymmetry that made `plane.ts` necessary.
+    ...(agentTenantId ? { tenantId: agentTenantId } : {}),
   });
   const sd = scoped.decisions[0];
   return {
