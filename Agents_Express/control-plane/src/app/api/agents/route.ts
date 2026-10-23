@@ -219,3 +219,53 @@ export async function POST(req: NextRequest) {
   });
   return NextResponse.json(agent, { status: 201 });
 }
+
+/**
+ * DELETE /api/agents?id=<id>
+ *
+ * There was no way to remove an agent at all — the route was GET + POST only,
+ * so a mistyped agent was permanent. That was tolerable while the store was
+ * wiped on every restart and became a real gap once it was not.
+ *
+ * REFUSES if a workflow step is bound to the agent. Deleting it would leave
+ * `step.agentId` pointing at nothing, and `resolveStep` fails that with
+ * "references agent X, which does not exist" at RUN time — far from the
+ * deletion that caused it. Better to say so here.
+ */
+export async function DELETE(req: NextRequest) {
+  const id = req.nextUrl.searchParams.get("id");
+  if (!id) return NextResponse.json({ error: "id is required" }, { status: 400 });
+
+  const index = store.agents.findIndex((a) => a.id === id);
+  if (index < 0) {
+    return NextResponse.json({ error: `unknown agent '${id}'` }, { status: 404 });
+  }
+  const agent = store.agents[index];
+
+  const boundSteps = store.workflows.flatMap((w) =>
+    w.steps
+      .filter((s) => s.agentId === agent.id)
+      .map((s) => `${w.name} / ${s.name}`)
+  );
+  if (boundSteps.length > 0) {
+    return NextResponse.json(
+      {
+        error:
+          `'${agent.name}' is bound to ${boundSteps.length} workflow step(s): ` +
+          `${boundSteps.join(", ")}. Unbind or delete those first.`,
+        boundSteps,
+      },
+      { status: 409 }
+    );
+  }
+
+  store.agents.splice(index, 1);
+  logAudit({
+    category: "agent",
+    action: "delete",
+    actor: "console-user",
+    tenantId: agent.tenantId,
+    detail: `Deleted agent '${agent.name}'`,
+  });
+  return NextResponse.json({ deleted: agent.id, name: agent.name });
+}

@@ -130,3 +130,60 @@ export async function POST(req: NextRequest) {
     { status: 201 }
   );
 }
+
+/**
+ * DELETE /api/tenants?id=<id>
+ *
+ * Added because the store became durable and the end-to-end suite creates
+ * throwaway tenants to probe plan limits. Those used to vanish on restart;
+ * now they accumulate, and after a few runs ten test entries sat above
+ * "Takeda" in every tenant picker.
+ *
+ * REFUSES rather than cascading. A tenant with agents, workflows, sub-units or
+ * its own registry records is load-bearing, and silently deleting its
+ * dependents would orphan state that other pages look up by id. The caller is
+ * told exactly what is in the way.
+ */
+export async function DELETE(req: NextRequest) {
+  const id = req.nextUrl.searchParams.get("id");
+  if (!id) {
+    return NextResponse.json({ error: "id is required" }, { status: 400 });
+  }
+  const index = store.tenants.findIndex((t) => t.id === id || t.tenantId === id);
+  if (index < 0) {
+    return NextResponse.json({ error: `unknown tenant '${id}'` }, { status: 404 });
+  }
+  const tenant = store.tenants[index];
+
+  const blockers: string[] = [];
+  const agents = store.agents.filter((a) => a.tenantId === tenant.id);
+  const workflows = store.workflows.filter((w) => w.tenantId === tenant.id);
+  const children = store.tenants.filter((t) => t.parentId === tenant.id);
+  const records = store.records.filter((r) => r.tenantId === tenant.id);
+  if (agents.length) blockers.push(`${agents.length} agent(s)`);
+  if (workflows.length) blockers.push(`${workflows.length} workflow(s)`);
+  if (children.length) blockers.push(`${children.length} sub-unit(s)`);
+  if (records.length) blockers.push(`${records.length} registry record(s)`);
+
+  if (blockers.length > 0) {
+    return NextResponse.json(
+      {
+        error:
+          `'${tenant.tenantName}' still owns ${blockers.join(", ")}. Remove ` +
+          `them first — deleting the tenant would leave them referencing a ` +
+          `tenant that no longer exists.`,
+        blockers,
+      },
+      { status: 409 }
+    );
+  }
+
+  store.tenants.splice(index, 1);
+  logAudit({
+    category: "model",
+    action: "tenant-delete",
+    actor: "platform-admin",
+    detail: `Deleted empty tenant '${tenant.tenantName}' (${tenant.tenantId})`,
+  });
+  return NextResponse.json({ deleted: tenant.id, tenantName: tenant.tenantName });
+}

@@ -376,3 +376,57 @@ export function usageByTenant(
   }
   return out;
 }
+
+// --------------------------------------------------------------------------- //
+// Presentation order
+// --------------------------------------------------------------------------- //
+
+export interface TenantOption<T> {
+  tenant: T;
+  /** Tree depth, for indenting a flat <select>. */
+  depth: number;
+}
+
+/**
+ * Tenants in TREE order: each root, then its children, depth-first.
+ *
+ * The Create Agent form rendered `tenants.map(...)` in store order, which is
+ * insertion order — and new tenants are unshifted to the FRONT. With 32 real
+ * tenants that was already hard to scan; once the store became durable and
+ * test tenants stopped being wiped on restart, ten throwaway entries sat above
+ * "Takeda" and the organisation looked like it had disappeared. It had not: it
+ * was at index 10 of an unsorted list.
+ *
+ * Sorting here rather than in the page so the tenant picker and the tenant
+ * tree cannot disagree about order. Cycle-safe, and any node whose parent is
+ * missing is emitted as a root rather than silently dropped — a tenant absent
+ * from the picker is unselectable, which is worse than one shown out of place.
+ */
+export function tenantsInTreeOrder<T extends { id: string; parentId: string | null }>(
+  tenants: T[]
+): TenantOption<T>[] {
+  const childrenOf = new Map<string | null, T[]>();
+  const ids = new Set(tenants.map((t) => t.id));
+  for (const t of tenants) {
+    const key = t.parentId && ids.has(t.parentId) ? t.parentId : null;
+    const list = childrenOf.get(key) ?? [];
+    list.push(t);
+    childrenOf.set(key, list);
+  }
+  const out: TenantOption<T>[] = [];
+  const seen = new Set<string>();
+  const walk = (parent: string | null, depth: number) => {
+    for (const t of childrenOf.get(parent) ?? []) {
+      if (seen.has(t.id)) continue;   // guards a parentId cycle
+      seen.add(t.id);
+      out.push({ tenant: t, depth });
+      walk(t.id, depth + 1);
+    }
+  };
+  walk(null, 0);
+  // Anything unreachable (a cycle) still has to be selectable.
+  for (const t of tenants) {
+    if (!seen.has(t.id)) out.push({ tenant: t, depth: 0 });
+  }
+  return out;
+}

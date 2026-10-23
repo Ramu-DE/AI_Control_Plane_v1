@@ -13,6 +13,8 @@ import {
 } from "@/components/ui";
 import { AwsModeBadge } from "@/components/AwsModeBadge";
 import { getJSON, sendJSON } from "@/lib/api";
+import { tenantsInTreeOrder } from "@/lib/tenancy";
+import { planLabel } from "@/lib/tiers";
 import {
   defaultAgentCompute,
   getRuntimeOption,
@@ -30,11 +32,23 @@ import {
 
 type SubTab = "general" | "model" | "prompt" | "tools" | "knowledge" | "compute";
 
+/**
+ * What the picker needs from /api/tenants.
+ *
+ * `usage` is supplied by the API (lib/tenancy.tenantUsage) so the picker can
+ * show remaining capacity and disable a tenant that is already full. Optional,
+ * so an older response without it still renders.
+ */
+type TenantForPicker = Tenant & {
+  config: { maxAgents: number };
+  usage?: { agents: number };
+};
+
 export default function AgentsPage() {
   const [agents, setAgents] = useState<AgentConfig[]>([]);
   const [models, setModels] = useState<CatalogModel[]>([]);
   const [approved, setApproved] = useState<RegistryRecord[]>([]);
-  const [tenants, setTenants] = useState<(Tenant & { config: { maxAgents: number } })[]>([]);
+  const [tenants, setTenants] = useState<TenantForPicker[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   // Deep link from the Tenants console: /agents?tenant=<id>.
@@ -54,7 +68,7 @@ export default function AgentsPage() {
       getJSON<AgentConfig[]>("/api/agents"),
       getJSON<CatalogModel[]>("/api/catalog"),
       getJSON<{ records: RegistryRecord[] }>("/api/registry"),
-      getJSON<{ tenants: (Tenant & { config: { maxAgents: number } })[] }>("/api/tenants"),
+      getJSON<{ tenants: TenantForPicker[] }>("/api/tenants"),
     ]);
     setAgents(a);
     setModels(m);
@@ -190,14 +204,19 @@ function CreateAgentModal({
 }: {
   models: CatalogModel[];
   approved: RegistryRecord[];
-  tenants: (Tenant & { config: { maxAgents: number } })[];
+  tenants: TenantForPicker[];
   onClose: () => void;
   onCreated: () => void;
 }) {
   const [form, setForm] = useState({
     name: "",
     description: "",
-    tenantId: tenants[0]?.id ?? "",
+    // The ROOT org, not `tenants[0]`. Store order is insertion order and new
+    // tenants are unshifted to the front, so the default used to be whichever
+    // tenant was created last — which after a smoke run was a throwaway at its
+    // agent limit, making the form fail on submit for no visible reason.
+    tenantId:
+      tenants.find((t) => t.parentId === null)?.id ?? tenants[0]?.id ?? "",
     modelId: models[0]?.id ?? "",
     systemPrompt: "",
     toolRefs: [] as string[],
@@ -274,11 +293,19 @@ function CreateAgentModal({
             value={form.tenantId}
             onChange={(e) => setForm({ ...form, tenantId: e.target.value })}
           >
-            {tenants.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.tenantName} ({t.tier} · max {t.config.maxAgents} agents)
-              </option>
-            ))}
+            {tenantsInTreeOrder(tenants).map(({ tenant: t, depth }) => {
+              const used = t.usage?.agents ?? 0;
+              const max = t.config.maxAgents;
+              const full = used >= max;
+              return (
+                <option key={t.id} value={t.id} disabled={full}>
+                  {"\u00A0".repeat(depth * 3)}
+                  {depth > 0 ? "└ " : ""}
+                  {t.tenantName} — {used}/{max} agents
+                  {full ? " (full)" : ""}
+                </option>
+              );
+            })}
           </select>
         </Field>
         <Field label="Description">
@@ -435,7 +462,7 @@ function AgentDetail({
   agent: AgentConfig;
   models: CatalogModel[];
   approved: RegistryRecord[];
-  tenants: (Tenant & { config: { maxAgents: number } })[];
+  tenants: TenantForPicker[];
   onBack: () => void;
 }) {
   const [tab, setTab] = useState<SubTab>("general");

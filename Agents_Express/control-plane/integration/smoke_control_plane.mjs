@@ -245,6 +245,35 @@ async function tenantJourney() {
         `agents=${after?.usage?.agents} anyFull=${after?.capacity?.anyFull}`);
   }
 
+  // CLEAN UP THE PROBE TENANT.
+  //
+  // It used to vanish with the in-memory store. Now the store is durable, so
+  // every run left another "Smoke Capacity Test" behind — and because new
+  // tenants are unshifted to the front, ten of them ended up above "Takeda"
+  // in every tenant picker, which looked exactly like the organisation had
+  // disappeared. A test that pollutes the data it runs against is a bug in the
+  // test.
+  //
+  // Its probe agents are deleted first; /api/tenants refuses to delete a
+  // tenant that still owns anything, which is the behaviour we want and also
+  // what makes this cleanup verifiable.
+  const probeAgents = ((await req("GET", "/agents")).json ?? [])
+    .filter((a) => a.tenantId === capTenant.id);
+  let agentDeleteSupported = true;
+  for (const a of probeAgents) {
+    const del = await req("DELETE", `/agents?id=${a.id}`);
+    if (del.status === 405 || del.status === 404) { agentDeleteSupported = false; break; }
+  }
+  if (!agentDeleteSupported) {
+    skip("probe tenant cleaned up",
+      "no DELETE on /api/agents yet, so the probe agents cannot be removed " +
+      "and the tenant cannot be deleted. Run `node integration/prune_test_data.mjs`.");
+  } else {
+    const del = await req("DELETE", `/tenants?id=${capTenant.id}`);
+    if (del.status === 200) ok("probe tenant cleaned up — no residue in the picker");
+    else bad("probe tenant cleaned up", `status ${del.status}: ${del.json?.error ?? ""}`);
+  }
+
   // Deep links the Tenants console emits must actually render.
   for (const path of [`/agents?tenant=${capTenant.id}`,
                       `/workflows?tenant=${capTenant.id}`]) {
