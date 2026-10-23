@@ -32,6 +32,7 @@ import type {
   WorkflowRun,
 } from "./types";
 import { normalizeAgentCompute } from "./runtimes";
+import { recoverInterruptedRuns } from "./workflow/recover";
 import {
   SCHEMA_VERSION,
   capLog,
@@ -1107,6 +1108,19 @@ let bootNote = "";
 if (!globalForStore.__cpStore) {
   const booted = bootStore();
   bootNote = booted.note;
+  // Runs that were in flight when the process stopped have no promise left to
+  // advance them. Marked here, on the RAW state before tracking starts, so
+  // recovery itself does not count as a user mutation. Only restored state can
+  // contain them — a fresh seed has no running runs.
+  const recovery = recoverInterruptedRuns(booted.state.workflowRuns);
+  if (recovery.interrupted.length > 0) {
+    bootNote +=
+      `; recovered ${recovery.interrupted.length} interrupted run(s): ` +
+      recovery.interrupted
+        .map((r) => `${r.workflowName}@step${r.stepIndex + 1}` +
+          (r.mayHaveExecuted ? " (may have executed)" : ""))
+        .join(", ");
+  }
   globalForStore.__cpStore = booted.state;
 }
 

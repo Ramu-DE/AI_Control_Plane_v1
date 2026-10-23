@@ -736,6 +736,10 @@ export interface Workflow {
 export type StepRunStatus =
   | "pending"
   | "running"
+  // The platform restarted while this step was executing. Distinct from
+  // "error": an error means the step ran and failed, this means we do not know
+  // whether it ran at all. See lib/workflow/recover.ts.
+  | "interrupted"
   | "awaiting-review"
   | "approved"
   | "revised"
@@ -809,6 +813,9 @@ export interface StepRun {
 
 export type WorkflowRunStatus =
   | "running"
+  // In flight when the process stopped, so nothing is left to advance it.
+  // A terminal state that invites an explicit resume, not an auto-retry.
+  | "interrupted"
   | "paused"
   | "completed"
   | "denied"

@@ -5,6 +5,7 @@ import { newStepRun } from "@/lib/bedrock";
 // — and tests/model-broker.test.ts, which fails if any route imports a
 // provider module again.
 import { ModelAccessDenied, invokeStep } from "@/lib/modelBroker";
+import { planResume } from "@/lib/workflow/recover";
 import type { Workflow, WorkflowRun, WorkflowStep } from "@/lib/types";
 import {
   StepResolutionError,
@@ -259,6 +260,7 @@ export async function POST(req: NextRequest) {
     | { op: "start"; workflowId: string; input: string; personaId?: string }
     | { op: "decision"; runId: string; decision: "approve" | "revise" | "deny"; revisedOutput?: string; note?: string }
     | { op: "rerun"; runId: string; stepIndex: number }
+    | { op: "resume"; runId: string }
     | { op: "create"; name: string; description?: string; tenantId: string; steps?: Workflow["steps"] };
 
   if (body.op === "create") {
@@ -413,6 +415,56 @@ export async function POST(req: NextRequest) {
     }
     logAudit({ category: "agent", action: "workflow-gate", actor: "Workshop Admin", detail: `${body.decision.toUpperCase()} at '${sr.name}' in run of '${run.workflowName}'` });
     return NextResponse.json(run);
+  }
+
+  if (body.op === "resume") {
+    const run = store.workflowRuns.find((r) => r.id === body.runId);
+    if (!run) return NextResponse.json({ error: "run not found" }, { status: 404 });
+    const wf = store.workflows.find((w) => w.id === run.workflowId);
+    if (!wf) {
+      return NextResponse.json(
+        { error: "the workflow this run belongs to no longer exists" },
+        { status: 409 }
+      );
+    }
+    const plan = planResume(run);
+    if (!plan.ok) {
+      return NextResponse.json({ error: plan.reason }, { status: 400 });
+    }
+    // Reset the interrupted step to pending and clear the uncertainty note.
+    // Only THAT step: everything before it completed and its output is real,
+    // so re-running them would discard good work and spend tokens again.
+    const target = run.steps[plan.fromStep];
+    target.status = "pending";
+    delete target.error;
+    delete target.finishedAt;
+    run.currentStep = plan.fromStep;
+    run.status = "running";
+    run.updatedAt = new Date().toISOString();
+    logAudit({
+      category: "agent",
+      action: "workflow-resume",
+      actor: run.personaId ?? "console-user",
+      detail:
+        `Resumed interrupted run of '${run.workflowName}' from step ` +
+        `${plan.fromStep + 1} ('${target.name}')`,
+    });
+    // Async like `start`, so a long resume does not hold the request open and
+    // time out the way the original 504 did.
+    void advance(run, wf)
+      .then(() => {
+        run.updatedAt = new Date().toISOString();
+      })
+      .catch((e) => {
+        run.status = "error";
+        const sr = run.steps[run.currentStep];
+        if (sr) {
+          sr.status = "error";
+          sr.error = (e as Error).message;
+        }
+        run.updatedAt = new Date().toISOString();
+      });
+    return NextResponse.json(run, { status: 202 });
   }
 
   if (body.op === "rerun") {

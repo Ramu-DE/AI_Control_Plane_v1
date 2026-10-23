@@ -124,7 +124,9 @@ export default function WorkflowsPage() {
 
   /** Poll one run until it reaches a terminal state, or we give up waiting. */
   async function pollRun(runId: string) {
-    const TERMINAL = ["completed", "error", "paused", "denied"];
+    // "interrupted" belongs here: nothing is left to advance such a run, so a
+    // poller that omitted it would spin forever on a run that will never move.
+    const TERMINAL = ["completed", "error", "paused", "denied", "interrupted"];
     for (let i = 0; i < 150; i++) {
       await new Promise((r) => setTimeout(r, 2000));
       try {
@@ -176,6 +178,24 @@ export default function WorkflowsPage() {
       });
       setActiveRun(run);
       await load();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function resumeRun(runId: string) {
+    setBusy(true);
+    setError("");
+    try {
+      const updated = await sendJSON<WorkflowRun>("/api/workflows", "POST", {
+        op: "resume",
+        runId,
+      });
+      setActiveRun(updated);
+      // Same poll as `start`: resume returns 202 with the run still running.
+      await pollRun(updated.id);
+    } catch (e) {
+      setError((e as Error).message);
     } finally {
       setBusy(false);
     }
@@ -373,6 +393,29 @@ export default function WorkflowsPage() {
                   />
                 ))}
               </div>
+
+              {activeRun?.status === "interrupted" && (
+                <div className="mt-4 rounded-xl border border-orange-300 bg-orange-50 p-4">
+                  <div className="text-sm font-semibold text-orange-900">
+                    ⚡ Interrupted — the platform restarted mid-run
+                  </div>
+                  <p className="mt-1 text-xs leading-relaxed text-orange-800">
+                    Steps before the interrupted one completed and their output
+                    is kept. The interrupted step may or may not have reached
+                    the model — the output is recorded only after the call
+                    returns, so an empty one means either it never ran or it ran
+                    and the answer was lost. Resuming re-runs just that step.
+                  </p>
+                  <button
+                    type="button"
+                    className="btn-primary mt-3"
+                    disabled={busy}
+                    onClick={() => resumeRun(activeRun.id)}
+                  >
+                    {busy ? "Resuming…" : "Resume from the interrupted step"}
+                  </button>
+                </div>
+              )}
 
               {gateStep && (
                 <div className="mt-4 rounded-xl border border-amber-300 bg-amber-50 p-4">
