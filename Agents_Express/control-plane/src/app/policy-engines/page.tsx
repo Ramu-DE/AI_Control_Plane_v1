@@ -105,13 +105,25 @@ function CreateEngineModal({
 }) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   async function create() {
-    const e = await sendJSON<PolicyEngine>("/api/policy-engines", "POST", {
-      op: "create",
-      name,
-      description,
-    });
-    onCreated(e.id);
+    setError(null);
+    setBusy(true);
+    try {
+      const e = await sendJSON<PolicyEngine>("/api/policy-engines", "POST", {
+        op: "create",
+        name,
+        description,
+      });
+      onCreated(e.id);
+    } catch (err) {
+      // Previously this rejection had nowhere to go: no message, no state
+      // change, modal still open — indistinguishable from a dead button.
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
   }
   return (
     <Modal
@@ -122,13 +134,23 @@ function CreateEngineModal({
           <button className="btn-ghost" onClick={onClose}>
             Cancel
           </button>
-          <button className="btn-primary" disabled={!name} onClick={create}>
-            Create
+          <button
+            type="button"
+            className="btn-primary"
+            disabled={!name || busy}
+            onClick={create}
+          >
+            {busy ? "Creating…" : "Create"}
           </button>
         </>
       }
     >
       <div className="space-y-4">
+        {error && (
+          <p className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">
+            {error}
+          </p>
+        )}
         <Field label="Name" required>
           <input
             className="input"
