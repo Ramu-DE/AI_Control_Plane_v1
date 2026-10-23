@@ -41,14 +41,41 @@ BASE_PATH=/proxy/3000 npm run dev     # then http://localhost:3000/proxy/3000
 
 Leave `BASE_PATH` unset for a normal local run.
 
-### State is in memory
+### State is durable (since the snapshot store landed)
 
-`src/lib/store.ts` is a module-level store. Everything you create through the
-UI — agents, workflows, registry records, audit entries — **disappears when the
-dev server restarts.** That is deliberate for a demo, and worth knowing before
-you wonder where your agent went.
+State is written to a JSON snapshot and **survives a restart**. It used to be
+in memory only, which cost real work more than once — including a set of
+hand-built agents, and then the demo data again when an env var needed a
+restart.
 
----
+```bash
+# Where the snapshot lives. Default: .data/control-plane.json (gitignored).
+export CONTROL_PLANE_STORE_PATH=/var/lib/agentexpress/control-plane.json
+# Audit entries retained before the oldest are dropped. Default 5000.
+export CONTROL_PLANE_MAX_AUDIT=5000
+```
+
+How it works, and what it is not:
+
+- Reads stay synchronous; **no mutation site changed**. The store is wrapped in
+  a change-tracking Proxy, so `store.agents.unshift(a)` and
+  `record.status = "Approved"` mark it dirty by themselves. An explicit
+  `persist()` at each of ~40 call sites would have been 40 chances to forget,
+  and the failure is silent until a restart loses exactly what nobody saved.
+- Writes are **debounced** (400 ms) and **atomic** — temp file then rename — so
+  a crash mid-write cannot corrupt the snapshot. A stale snapshot loses
+  seconds; a corrupt one loses everything.
+- A2A peers persist to a **separate** file (`*.a2a.json`), matching their
+  separate singleton.
+- A corrupt or wrong-schema snapshot is **discarded loudly** and the seed runs.
+  Merging an old shape into a new one would produce a half-migrated store that
+  looks fine, which is the worst of the three outcomes. Bump `SCHEMA_VERSION`
+  in `lib/persist.ts` when the shape changes incompatibly.
+- Audit truncation is **recorded** as an audit entry, so the log always
+  accounts for its own gaps.
+- **Not multi-process safe and not transactional.** Two app instances sharing
+  one snapshot file would clobber each other. Said plainly rather than guarded
+  against, because pretending otherwise is worse than the limitation.
 
 ## 2. graph-utility (Python)
 

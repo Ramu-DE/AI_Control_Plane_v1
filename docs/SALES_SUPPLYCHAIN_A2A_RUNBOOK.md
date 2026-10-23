@@ -586,14 +586,19 @@ called twice.
   platform governs; nothing calls it automatically during a run.
 - **A2A peers must be reachable over HTTPS.** A locally-run peer needs a tunnel,
   or use Option A and point it at this deployment's own public URL.
-- **State is in memory.** Workflows and records vanish when the dev server
-  restarts, and so does anything created through the console — including a
-  catalog model or an agent. Setting an env var requires a restart, so it wipes
-  exactly the data you just built.
+- **State now SURVIVES a restart.** It is written to a JSON snapshot
+  (`.data/control-plane.json`, plus `.data/control-plane.a2a.json` for peers),
+  so agents, workflows, records and an approved peer's discovered card all come
+  back. Setting an env var still requires a restart, but it no longer wipes
+  what you built. See the durability section in `SETUP.md`.
 
   The Sales and Supply Chain agents, their Databricks model, and the two A2A
-  peers are therefore **seeded in code** and come back on every restart. Only
-  what you add on top of them needs rebuilding.
+  peers are **also seeded in code**, so a genuinely fresh install — or one
+  where the snapshot was discarded as corrupt — still has the scenario.
+
+  Two caveats that remain: the snapshot is **single-process** (two app
+  instances sharing one file would clobber each other), and deleting
+  `.data/` is still a full reset.
 - **Only one catalog model really executes.** `model-dbx-llama-70b`
   (`databricks-meta-llama-3-3-70b-instruct`) is provisioned; the seeded Bedrock
   and AgentCore Gateway entries are illustrative, and an agent bound to one of

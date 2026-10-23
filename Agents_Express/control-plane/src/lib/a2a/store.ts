@@ -9,6 +9,14 @@
 // graph control plane, so two concurrent approvals cannot silently clobber.
 
 import { newId } from "../store";
+import {
+  createPersister,
+  flushOnExit,
+  loadSnapshot,
+  storePath,
+  trackChanges,
+  type Persister,
+} from "../persist";
 import { configuredSelfBaseUrl } from "./server";
 import { canTransition } from "./logic";
 import type { RecordStatus } from "../types";
@@ -107,10 +115,45 @@ function seedPeers(): A2APeer[] {
   ];
 }
 
-const globalForA2A = globalThis as unknown as { __a2aPeers?: A2APeer[] };
+// Peers persist in their OWN snapshot file, not the main store's.
+//
+// They are a separate singleton with a separate lifecycle, and an approved
+// peer plus its discovered card is exactly the state that was most annoying to
+// rebuild after a restart. Same mechanism as lib/store.ts: a change-tracking
+// Proxy, so `transitionPeer` and `setPeerCard` keep mutating in place.
+const globalForA2A = globalThis as unknown as {
+  __a2aPeers?: A2APeer[];
+  __a2aPersister?: Persister;
+};
 
-export const a2aPeers: A2APeer[] = globalForA2A.__a2aPeers ?? seedPeers();
-if (!globalForA2A.__a2aPeers) globalForA2A.__a2aPeers = a2aPeers;
+function peersPath(): string {
+  const main = storePath();
+  return main.replace(/\.json$/, "") + ".a2a.json";
+}
+
+if (!globalForA2A.__a2aPeers) {
+  const loaded = loadSnapshot<A2APeer[]>(peersPath());
+  // An empty array in the snapshot is a legitimate state — every peer was
+  // deleted — so only a missing or untrusted snapshot falls back to the seed.
+  globalForA2A.__a2aPeers = Array.isArray(loaded.state) ? loaded.state : seedPeers();
+}
+
+const rawPeers: A2APeer[] = globalForA2A.__a2aPeers!;
+
+if (!globalForA2A.__a2aPersister) {
+  const p = createPersister<A2APeer[]>({
+    getState: () => rawPeers,
+    path: peersPath(),
+    onEvent: (m) => console.warn(`[a2a] ${m}`),
+  });
+  flushOnExit(p);
+  globalForA2A.__a2aPersister = p;
+}
+
+export const a2aPeers: A2APeer[] = trackChanges(
+  rawPeers,
+  globalForA2A.__a2aPersister!.markDirty
+);
 
 // --------------------------------------------------------------------------- //
 // Accessors

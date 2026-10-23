@@ -32,6 +32,16 @@ import type {
   WorkflowRun,
 } from "./types";
 import { normalizeAgentCompute } from "./runtimes";
+import {
+  SCHEMA_VERSION,
+  capLog,
+  createPersister,
+  flushOnExit,
+  loadSnapshot,
+  storePath,
+  trackChanges,
+  type Persister,
+} from "./persist";
 
 export interface Store {
   tenants: Tenant[];
@@ -1050,11 +1060,89 @@ when {
   };
 }
 
-// Persist the singleton on globalThis so it survives hot-reloads in dev.
-const globalForStore = globalThis as unknown as { __cpStore?: Store };
+// --------------------------------------------------------------------------- //
+// The singleton, now DURABLE
+// --------------------------------------------------------------------------- //
+//
+// Three layers, in order:
+//   1. globalThis — survives `next dev` hot-reloads within one process
+//   2. a JSON snapshot on disk — survives a restart
+//   3. seed() — a genuinely fresh install, or a snapshot we refuse to trust
+//
+// Reads stay synchronous and every existing mutation site is untouched: the
+// store is wrapped in a change-tracking Proxy, so `store.agents.unshift(a)`
+// and `record.status = "Approved"` mark it dirty by themselves. See
+// lib/persist.ts for why that is a Proxy rather than ~40 `persist()` calls.
+const globalForStore = globalThis as unknown as {
+  __cpStore?: Store;
+  __cpPersister?: Persister;
+};
 
-export const store: Store = globalForStore.__cpStore ?? seed();
-if (!globalForStore.__cpStore) globalForStore.__cpStore = store;
+/** Audit entries kept. Unbounded growth was a leak before persistence, and
+ *  with it, an ever-growing file. Truncation is RECORDED, never silent. */
+const MAX_AUDIT_ENTRIES = Number(process.env.CONTROL_PLANE_MAX_AUDIT || 5000);
+
+function bootStore(): { state: Store; note: string } {
+  const loaded = loadSnapshot<Store>();
+  if (!loaded.state) return { state: seed(), note: loaded.reason };
+  // A snapshot that parsed but is missing a collection this build expects
+  // would throw on first access somewhere far away. Fill gaps from the seed
+  // rather than trusting an under-specified file.
+  const fresh = seed();
+  const merged = { ...fresh, ...loaded.state } as Store;
+  const restored: string[] = [];
+  for (const key of Object.keys(fresh) as (keyof Store)[]) {
+    if (!Array.isArray(merged[key])) {
+      (merged[key] as unknown) = fresh[key];
+      restored.push(key);
+    }
+  }
+  const note = restored.length
+    ? `${loaded.reason}; re-seeded missing collection(s): ${restored.join(", ")}`
+    : loaded.reason;
+  return { state: merged, note };
+}
+
+let bootNote = "";
+if (!globalForStore.__cpStore) {
+  const booted = bootStore();
+  bootNote = booted.note;
+  globalForStore.__cpStore = booted.state;
+}
+
+const rawStore: Store = globalForStore.__cpStore!;
+
+if (!globalForStore.__cpPersister) {
+  const persister = createPersister<Store>({
+    getState: () => rawStore,
+    onEvent: (m) => console.warn(`[store] ${m}`),
+  });
+  flushOnExit(persister, (m) => console.log(`[store] ${m}`));
+  globalForStore.__cpPersister = persister;
+  console.log(`[store] ${bootNote}`);
+}
+
+const persister = globalForStore.__cpPersister!;
+
+export const store: Store = trackChanges(rawStore, persister.markDirty);
+
+/** Write any pending changes immediately. For shutdown paths and tests. */
+export function flushStore(): void {
+  persister.flush();
+}
+
+/** Snapshot diagnostics, surfaced by /api/governance. */
+export function storeDurability() {
+  const s = persister.stats();
+  return {
+    path: storePath(),
+    schemaVersion: SCHEMA_VERSION,
+    writes: s.writes,
+    failures: s.failures,
+    pendingWrite: s.dirty,
+    bootNote,
+  };
+}
 
 // Normalize agents retained across next dev hot-reloads from the legacy
 // { runtime: "Bedrock AgentCore" } compute shape into the two-plane model.
@@ -1071,5 +1159,20 @@ export function logAudit(
 ): AuditEvent {
   const evt: AuditEvent = { ...event, id: newId("evt"), at: new Date().toISOString() };
   store.audit.unshift(evt);
+  const dropped = capLog(store.audit, MAX_AUDIT_ENTRIES);
+  if (dropped > 0) {
+    // Dropping governance records silently would be the wrong kind of quiet.
+    // One entry records the loss, so the log always accounts for itself.
+    store.audit.unshift({
+      id: newId("evt"),
+      category: "policy",
+      action: "audit-truncated",
+      actor: "platform",
+      detail:
+        `Audit log reached ${MAX_AUDIT_ENTRIES} entries; dropped the ` +
+        `${dropped} oldest. Raise CONTROL_PLANE_MAX_AUDIT to retain more.`,
+      at: new Date().toISOString(),
+    });
+  }
   return evt;
 }
