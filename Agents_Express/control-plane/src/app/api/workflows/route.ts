@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { store, newId, logAudit } from "@/lib/store";
-import { runStepOnBedrock, newStepRun } from "@/lib/bedrock";
-import { runStepOnDatabricks, runStepOnDatabricksWithTools } from "@/lib/databricks";
+import { newStepRun } from "@/lib/bedrock";
+// Provider calls go through the broker, never directly. See lib/modelBroker.ts
+// — and tests/model-broker.test.ts, which fails if any route imports a
+// provider module again.
+import { ModelAccessDenied, invokeStep } from "@/lib/modelBroker";
 import type { Workflow, WorkflowRun, WorkflowStep } from "@/lib/types";
 import {
   StepResolutionError,
@@ -76,30 +79,41 @@ async function runStep(
   // Real tool calling is only available on the Databricks plane today (verified:
   // the FM endpoints return finish_reason "tool_calls"). A Bedrock step with
   // executable tools still runs, but without them — and says so.
-  let result;
-  if (resolved.executor === "databricks" && resolved.executableTools.length > 0) {
-    result = await runStepOnDatabricksWithTools(
-      effective,
-      task,
-      prior,
-      resolved.executableTools
+  if (resolved.executor !== "databricks" && resolved.executableTools.length > 0) {
+    notes.push(
+      `${resolved.executableTools.length} executable tool(s) were not offered: tool calling ` +
+        `is implemented for the Databricks plane only`
     );
-  } else if (resolved.executor === "databricks") {
-    result = await runStepOnDatabricks(effective, task, prior);
-  } else {
-    if (resolved.executableTools.length > 0) {
-      notes.push(
-        `${resolved.executableTools.length} executable tool(s) were not offered: tool calling ` +
-          `is implemented for the Databricks plane only`
-      );
+  }
+
+  let result;
+  try {
+    result = await invokeStep(effective, task, prior, resolved.executableTools, {
+      tenantId: run.tenantId,
+      personaId: run.personaId || "console-user",
+      origin: "workflow",
+      ...(resolved.agent ? { agentId: resolved.agent.id } : {}),
+      ...(resolved.agent
+        ? { modelRuntimeId: resolved.agent.compute.modelRuntimeId }
+        : {}),
+    });
+  } catch (e) {
+    if (e instanceof ModelAccessDenied) {
+      // A governance refusal, not a provider failure. Surfaced as a step error
+      // so the run trace shows WHY rather than a generic 500.
+      throw new Error(`model access denied: ${e.message}`);
     }
-    result = await runStepOnBedrock(effective, task, prior);
+    throw e;
   }
 
   return {
-    ...result,
-    notes: [...notes, ...(("notes" in result && result.notes) || [])],
-    toolCalls: ("toolCalls" in result && result.toolCalls) || undefined,
+    output: result.output,
+    usage: { totalTokens: result.totalTokens, inputTokens: 0, outputTokens: 0 },
+    latencyMs: result.latencyMs,
+    costUsd: 0,
+    resolvedModelId: result.resolvedModelId,
+    notes: [...notes, ...result.notes],
+    ...(result.toolCalls ? { toolCalls: result.toolCalls } : {}),
     grounding,
     provenance: {
       ...(resolved.agent

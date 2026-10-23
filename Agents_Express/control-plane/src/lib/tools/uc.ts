@@ -39,6 +39,123 @@ const FORBIDDEN = [
   "GRANT", "REVOKE", "COPY", "REFRESH", "OPTIMIZE", "VACUUM", "RESTORE",
 ];
 
+// --------------------------------------------------------------------------- //
+// Scope allowlist — how far into the lakehouse a tool may reach
+// --------------------------------------------------------------------------- //
+//
+// Read-only was never the whole question. `uc_query` runs with the workspace
+// credential, so a read-only statement could still read ANY table that
+// credential can see — the entire lakehouse, from a prompt.
+//
+// The EKS workshop's answer to the same problem is that the sandbox is
+// air-gapped and the data is injected out-of-band: the executing thing cannot
+// reach anything it was not handed. We cannot air-gap a SQL warehouse, but we
+// can bound the reach, which is the same idea one level up.
+//
+// `DATABRICKS_UC_ALLOWED_SCOPES` is a comma-separated list of `catalog.schema`
+// prefixes, e.g. "workspace.default,usdev_corp.corp_us_mart".
+//
+// UNSET MEANS UNRESTRICTED, deliberately. Defaulting to deny would be the
+// safer-looking choice and would break every existing deployment the moment it
+// shipped — including the live demo. Instead the permissive case is reported in
+// the tool result, so a model's own output records that the reach was unbounded,
+// and an operator setting the variable gets enforcement with no code change.
+
+export const UC_SCOPES_VAR = "DATABRICKS_UC_ALLOWED_SCOPES";
+
+/** Parsed `catalog.schema` prefixes. Empty = unrestricted. */
+export function allowedScopes(): string[] {
+  return (process.env[UC_SCOPES_VAR] || "")
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+/**
+ * Three-part table references in a statement.
+ *
+ * Deliberately simple and deliberately NOT a SQL parser. It finds
+ * `a.b.c`-shaped identifiers, which is the form Unity Catalog queries use, and
+ * `tableRefsAreInScope` then requires at least one and permits only known
+ * prefixes. A statement this cannot resolve is REFUSED rather than guessed at:
+ * for a scope check, "I could not tell what this reads" has to mean no.
+ *
+ * Backticks are stripped because Databricks quotes identifiers with them, so
+ * `` `cat`.`sch`.`tbl` `` is the same reference as `cat.sch.tbl`.
+ */
+export function extractTableRefs(sql: string): string[] {
+  const cleaned = (sql || "").replace(/`/g, "");
+  const found = new Set<string>();
+  const re = /\b([A-Za-z_][\w]*)\.([A-Za-z_][\w]*)\.([A-Za-z_][\w]*)\b/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(cleaned)) !== null) {
+    found.add(`${m[1]}.${m[2]}.${m[3]}`.toLowerCase());
+  }
+  return [...found].sort();
+}
+
+export interface ScopeCheck {
+  ok: boolean;
+  /** Empty when the allowlist is unset. */
+  scopes: string[];
+  refs: string[];
+  /** References outside every permitted scope. */
+  violations: string[];
+  reason?: string;
+}
+
+/** Is every table this statement touches inside an allowed scope? */
+export function checkSqlScope(sql: string): ScopeCheck {
+  const scopes = allowedScopes();
+  const refs = extractTableRefs(sql);
+  if (scopes.length === 0) {
+    return { ok: true, scopes, refs, violations: [] };
+  }
+  if (refs.length === 0) {
+    return {
+      ok: false,
+      scopes,
+      refs,
+      violations: [],
+      reason:
+        `no fully-qualified catalog.schema.table reference was found, so the ` +
+        `statement's reach cannot be verified against the allowlist. Qualify ` +
+        `every table as catalog.schema.table`,
+    };
+  }
+  const violations = refs.filter(
+    (r) => !scopes.some((s) => r === s || r.startsWith(`${s}.`))
+  );
+  return {
+    ok: violations.length === 0,
+    scopes,
+    refs,
+    violations,
+    ...(violations.length > 0
+      ? {
+          reason:
+            `outside the permitted scope(s) [${scopes.join(", ")}]: ` +
+            violations.join(", "),
+        }
+      : {}),
+  };
+}
+
+/** Is a `catalog.schema` pair itself permitted? Used by the listing tools. */
+export function checkScopePair(catalog: string, schema: string): ScopeCheck {
+  const scopes = allowedScopes();
+  const ref = `${catalog}.${schema}`.toLowerCase();
+  if (scopes.length === 0) return { ok: true, scopes, refs: [ref], violations: [] };
+  const ok = scopes.some((s) => ref === s || ref.startsWith(`${s}.`) || s.startsWith(`${ref}.`));
+  return {
+    ok,
+    scopes,
+    refs: [ref],
+    violations: ok ? [] : [ref],
+    ...(ok ? {} : { reason: `'${ref}' is outside the permitted scope(s) [${scopes.join(", ")}]` }),
+  };
+}
+
 export function isReadOnlySql(sql: string): boolean {
   const trimmed = (sql || "").trim().replace(/;+\s*$/, "");
   if (!trimmed) return false;
@@ -144,6 +261,10 @@ export async function ucListTables(catalog: string, schema: string): Promise<{
   if (!catalog?.trim() || !schema?.trim()) {
     throw new UcToolError("uc_list_tables requires both 'catalog' and 'schema'");
   }
+  const listScope = checkScopePair(catalog, schema);
+  if (!listScope.ok) {
+    throw new UcToolError(`uc_list_tables refused — ${listScope.reason}`);
+  }
   const res = await dbx(
     `/api/2.1/unity-catalog/tables?catalog_name=${encodeURIComponent(catalog)}` +
       `&schema_name=${encodeURIComponent(schema)}`
@@ -169,6 +290,11 @@ export async function ucDescribeTable(fullName: string): Promise<Record<string, 
   if (!fullName?.trim() || fullName.split(".").length !== 3) {
     throw new UcToolError("uc_describe_table requires a 3-part name: catalog.schema.table");
   }
+  const [dCat, dSchema] = fullName.split(".");
+  const descScope = checkScopePair(dCat, dSchema);
+  if (!descScope.ok) {
+    throw new UcToolError(`uc_describe_table refused — ${descScope.reason}`);
+  }
   const res = await dbx(`/api/2.1/unity-catalog/tables/${encodeURIComponent(fullName)}`);
   const cols = ((res.columns as Record<string, unknown>[]) ?? []).map((c) => ({
     name: c.name,
@@ -189,6 +315,8 @@ export async function ucDescribeTable(fullName: string): Promise<Record<string, 
 export async function ucQuery(sql: string): Promise<{
   sql: string;
   columns: string[];
+  /** How far this query was permitted to reach, and what it actually read. */
+  scope: { allowed: string[] | string; read: string[] };
   rowCount: number;
   rows: unknown[][];
   truncated: boolean;
@@ -200,6 +328,13 @@ export async function ucQuery(sql: string): Promise<{
       "uc_query accepts a single read-only statement only " +
         "(SELECT / SHOW / DESCRIBE / WITH / EXPLAIN); writes and DDL are refused"
     );
+  }
+  // Read-only is not the same as in-bounds: the credential can see the whole
+  // lakehouse. Checked BEFORE the statement is sent, so a refused query costs
+  // nothing and leaks nothing.
+  const scope = checkSqlScope(sql);
+  if (!scope.ok) {
+    throw new UcToolError(`uc_query refused — ${scope.reason}`);
   }
   const warehouseId = await resolveWarehouseId();
   const res = await dbx("/api/2.0/sql/statements", {
@@ -234,6 +369,13 @@ export async function ucQuery(sql: string): Promise<{
   return {
     sql: sql.trim(),
     columns,
+    // The reach is reported alongside the rows. When no allowlist is
+    // configured the model's own output says so, rather than the unbounded
+    // case being the silent one.
+    scope: scope.scopes.length > 0
+      ? { allowed: scope.scopes, read: scope.refs }
+      : { allowed: "UNRESTRICTED — no DATABRICKS_UC_ALLOWED_SCOPES configured",
+          read: scope.refs },
     ...interpretRows(all, manifest),
   };
 }

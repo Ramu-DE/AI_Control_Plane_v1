@@ -27,6 +27,7 @@ type TenantRich = Tenant & {
   usage: TenantUsage;
   capacity: { plan: string; lines: CapacityLine[]; anyFull: boolean; anyTight: boolean };
   perAgentLimits: PerAgentLimit[];
+  modelAccess: { modelIds: string[] | null; inheritedFrom: string | null };
 };
 
 const TYPE_META: Record<Tenant["type"], { label: string; icon: string; color: string }> = {
@@ -495,6 +496,50 @@ export default function TenantsPage() {
                       </span>
                     ))}
                   </div>
+                </div>
+
+                {/* Which models this tenant may invoke. Inherited down the
+                    tree, so the governing rule is often set elsewhere — the
+                    page says where, because "why can't this BU use Claude?"
+                    is otherwise unanswerable from the UI. */}
+                <div className="mt-5 border-t border-slate-100 pt-4">
+                  <div className="flex items-baseline justify-between">
+                    <span className="text-xs font-medium text-slate-500">
+                      Model access
+                    </span>
+                    {selected.modelAccess.inheritedFrom &&
+                      selected.modelAccess.inheritedFrom !== selected.id && (
+                        <button
+                          className="text-[10px] text-slate-400 underline hover:text-slate-700"
+                          onClick={() =>
+                            setSelectedId(selected.modelAccess.inheritedFrom!)
+                          }
+                        >
+                          inherited from{" "}
+                          {byId.get(selected.modelAccess.inheritedFrom)?.tenantName ??
+                            selected.modelAccess.inheritedFrom}
+                        </button>
+                      )}
+                  </div>
+                  {selected.modelAccess.modelIds === null ? (
+                    <p className="mt-1.5 text-xs text-slate-500">
+                      Unrestricted — any model in the catalog. No allowlist is
+                      set on this tenant or any ancestor.
+                    </p>
+                  ) : selected.modelAccess.modelIds.length === 0 ? (
+                    <p className="mt-1.5 text-xs text-rose-700">
+                      No models permitted — agents in this tenant cannot invoke
+                      anything.
+                    </p>
+                  ) : (
+                    <div className="mt-1.5 flex flex-wrap gap-1.5">
+                      {selected.modelAccess.modelIds.map((id) => (
+                        <span key={id} className="badge bg-slate-100 text-slate-600">
+                          {id}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 {selected.capacity.anyFull && (

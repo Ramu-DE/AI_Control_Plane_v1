@@ -46,6 +46,15 @@ export interface Tenant {
   isolation: IsolationModel;
   // Data-plane routing hint (pool = shared resource, silo = dedicated).
   resourcePool: string;
+  /**
+   * Catalog model ids this tenant (and its descendants) may invoke.
+   *
+   * `undefined` means INHERIT from the nearest ancestor that sets it; an
+   * explicit `[]` means no models at all, which is a different and legitimate
+   * statement — it freezes a tenant without deleting it. See
+   * `lib/modelAccess.ts`.
+   */
+  allowedModelIds?: string[];
   createdAt: string;
   updatedAt: string;
 }

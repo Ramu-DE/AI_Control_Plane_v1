@@ -137,6 +137,11 @@ export QDRANT_API_KEY=<key>
 export AWS_REGION=us-west-2
 export AWS_EXECUTION_MODE=local          # set to 'aws' for live AWS calls
 
+# Unity Catalog reach — how far a TOOL may read.
+# Comma-separated catalog.schema prefixes. UNSET = unrestricted, which is the
+# pre-existing behaviour; set it to bound what a prompt can reach.
+export DATABRICKS_UC_ALLOWED_SCOPES=workspace.default,workspace.graph_demo
+
 # Inbound A2A — lets EXTERNAL agents call this platform's agents.
 # Optional, and off until configured.
 export A2A_INBOUND_TOKEN="$(openssl rand -hex 24)"
@@ -154,6 +159,38 @@ What each unlocks:
 | `AWS_*` | Bedrock models, Verified Permissions adapter | Bedrock steps fail; local Cedar still works |
 | `A2A_INBOUND_*` | `POST /api/a2a/rpc` — external agents calling in | the endpoint returns 503; outbound A2A still works |
 | `A2A_SELF_BASE_URL` | the public RPC url on the agent card, and the self-pointing seeded peers | the card falls back to request-derived values; the peers stay in `REPLACE-ME` preview mode |
+| `DATABRICKS_UC_ALLOWED_SCOPES` | bounds how far `uc_query` / `uc_list_tables` / `uc_describe_table` may read | **unrestricted** — a tool can read any table the credential can see |
+
+### Two controls worth setting before anyone else gets the URL
+
+Both were adopted from the *Secure AI Agents on Amazon EKS* workshop, where the
+agent's own IAM role carries three DynamoDB actions on one table ARN and **no
+Bedrock permission at all** — model access exists only behind a gateway scoped
+to named model ARNs.
+
+**1. Model access is brokered.** Every model call now goes through
+`lib/modelBroker.ts`, which checks the model is in the catalog, is on the
+invoking tenant's allowlist (inherited down the tenant tree), and that the
+declared runtime matches where the model is really served — then audits the
+call with tenant, persona, model, plane, tool count and tokens. A refusal never
+reaches a provider, so a denied call costs nothing. Set a tenant's allowlist
+with `allowedModelIds` on `POST /api/tenants`; omit it to inherit, pass `[]` to
+freeze a tenant. The Tenants page shows the effective rule and where it came
+from.
+
+The chokepoint is enforced by `tests/model-broker.test.ts`, which fails if any
+route imports `lib/databricks` or `lib/bedrock` directly. Credentials cannot be
+separated by IAM role inside one Next.js process, so that test *is* the
+boundary — delete it and the broker is only a convention.
+
+**2. Tool reach is bounded.** `DATABRICKS_UC_ALLOWED_SCOPES` limits which
+`catalog.schema` a tool may touch. Read-only was never the whole question: the
+credential can see the entire lakehouse, so a read-only statement could still
+read all of it from a prompt. With the allowlist set, an out-of-scope query is
+refused before it is sent, a statement that cannot be resolved to a qualified
+table is refused rather than guessed at, and the permitted scope is reported
+back in the tool result — so when it is *unset*, the model's own output says
+the reach was unbounded.
 
 ### Inbound A2A, briefly
 

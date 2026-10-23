@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { store, newId, logAudit } from "@/lib/store";
 import { getTierConfig, isolationForTier, planLabel } from "@/lib/tiers";
 import { perAgentLimits, tenantCapacity, tenantUsage } from "@/lib/tenancy";
+import { effectiveModelAllowlist } from "@/lib/modelAccess";
 import { Tenant, TenantTier, TierConfig } from "@/lib/types";
 
 // GET → tenants + resolved tier config + LIVE usage.
@@ -28,6 +29,9 @@ export async function GET() {
       usage,
       capacity: tenantCapacity(usage, config, planLabel(t.tier)),
       perAgentLimits: perAgentLimits(usage, config),
+      // The EFFECTIVE allowlist, after inheritance — what actually governs
+      // this tenant, not just what it declares itself.
+      modelAccess: effectiveModelAllowlist(t.id, store.tenants),
     };
   });
   return NextResponse.json({ tenants: withConfig });
@@ -40,6 +44,7 @@ export async function POST(req: NextRequest) {
     tier?: TenantTier;
     parentId?: string | null;
     type?: Tenant["type"];
+    allowedModelIds?: string[] | null;
   };
   if (!body.tenantId || !body.tenantName) {
     return NextResponse.json(
@@ -60,6 +65,25 @@ export async function POST(req: NextRequest) {
   const tier: TenantTier = body.tier === "pro" ? "pro" : "basic";
   const isolation = isolationForTier(tier);
   const now = new Date().toISOString();
+  // An allowlist is only accepted if every id is a real catalog model.
+  // Accepting an unknown id would create a rule that silently denies
+  // everything, which reads as a platform fault rather than a policy.
+  if (Array.isArray(body.allowedModelIds)) {
+    const unknown = body.allowedModelIds.filter(
+      (id) => !store.models.some((m) => m.id === id)
+    );
+    if (unknown.length > 0) {
+      return NextResponse.json(
+        {
+          error:
+            "allowedModelIds must reference catalog models. Unknown: " +
+            unknown.join(", "),
+        },
+        { status: 400 }
+      );
+    }
+  }
+
   const tenant: Tenant = {
     id: newId("tenant"),
     tenantId: body.tenantId,
@@ -69,6 +93,11 @@ export async function POST(req: NextRequest) {
     tier,
     isolation,
     resourcePool: isolation === "silo" ? `dedicated-${body.tenantId}` : "shared-pool-01",
+    // `null` from the caller means "inherit" (field absent); an array — even an
+    // empty one — is an explicit rule. See lib/modelAccess.ts.
+    ...(Array.isArray(body.allowedModelIds)
+      ? { allowedModelIds: body.allowedModelIds }
+      : {}),
     createdAt: now,
     updatedAt: now,
   };

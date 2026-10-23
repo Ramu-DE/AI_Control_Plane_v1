@@ -28,8 +28,10 @@ import {
 } from "@/lib/a2a/server";
 import { authorizeAgentStep } from "@/lib/workflow/govern";
 import { resolveStep } from "@/lib/workflow/resolve";
-import { runStepOnDatabricks, runStepOnDatabricksWithTools } from "@/lib/databricks";
-import { runStepOnBedrock } from "@/lib/bedrock";
+// Provider calls go through the broker, so an inbound A2A call is subject to
+// the same model allowlist as a workflow step. An external caller choosing a
+// skill must not be a way around a tenant's model policy.
+import { ModelAccessDenied, invokeStep } from "@/lib/modelBroker";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -98,21 +100,34 @@ export async function POST(req: NextRequest) {
     let output = "";
     let toolCallCount = 0;
     let totalTokens = 0;
-    if (resolved.executor === "databricks" && resolved.executableTools.length > 0) {
-      const r = await runStepOnDatabricksWithTools(
-        step, parsed.text, [], resolved.executableTools
+    try {
+      const r = await invokeStep(
+        step, parsed.text, [], resolved.executableTools,
+        {
+          tenantId: agent.tenantId,
+          personaId,
+          origin: "a2a-inbound",
+          agentId: agent.id,
+          modelRuntimeId: agent.compute.modelRuntimeId,
+        }
       );
-      output = r.output ?? "";
-      toolCallCount = r.toolCalls?.length ?? 0;
-      totalTokens = r.usage?.totalTokens ?? 0;
-    } else if (resolved.executor === "databricks") {
-      const r = await runStepOnDatabricks(step, parsed.text, []);
-      output = r.output ?? "";
-      totalTokens = r.usage?.totalTokens ?? 0;
-    } else {
-      const r = await runStepOnBedrock(step, parsed.text, []);
-      output = r.output ?? "";
-      totalTokens = r.usage?.totalTokens ?? 0;
+      output = r.output;
+      toolCallCount = r.toolCallCount;
+      totalTokens = r.totalTokens;
+    } catch (e) {
+      if (e instanceof ModelAccessDenied) {
+        auditInbound({
+          outcome: "refused",
+          actor: personaId,
+          detail: `DENY inbound A2A call to '${agent.name}' — ${e.message}`,
+        });
+        return NextResponse.json(
+          errorEnvelope(rpcId, -32000,
+            `not authorized to invoke '${agent.name}': ${e.message}`),
+          { status: 403 }
+        );
+      }
+      throw e;
     }
 
     const text = output.trim();
