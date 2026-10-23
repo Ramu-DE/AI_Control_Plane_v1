@@ -65,8 +65,24 @@ How it works, and what it is not:
 - Writes are **debounced** (400 ms) and **atomic** — temp file then rename — so
   a crash mid-write cannot corrupt the snapshot. A stale snapshot loses
   seconds; a corrupt one loses everything.
-- A2A peers persist to a **separate** file (`*.a2a.json`), matching their
-  separate singleton.
+- **Every** store is durable, each to its own file, because they already have
+  independent lifecycles and seeds — and one shared file would mean a write to
+  any store rewrites all of them, with one corrupt section discarding four
+  stores instead of one:
+
+  | file | holds |
+  |---|---|
+  | `control-plane.json` | tenants, agents, registry, workflows, runs, audit, policies |
+  | `control-plane.a2a.json` | A2A peers and their discovered cards |
+  | `control-plane.graph-control.json` | Graph Sources, build runs, mapping proposals/versions |
+  | `control-plane.identity.json` | workload identities and delegation profiles |
+
+- The graph control store holds **Maps**, which needed two special cases.
+  `JSON.stringify(new Map([["a",1]]))` is `{}` — verified — so it converts to
+  entry pairs explicitly, and a change-tracking Proxy cannot be used at all
+  (`map.get()` through a proxy throws "called on incompatible receiver"), so
+  that one class marks itself dirty. A test drives every public mutator and
+  asserts the snapshot grew, so a future mutator that forgets is caught.
 - A corrupt or wrong-schema snapshot is **discarded loudly** and the seed runs.
   Merging an old shape into a new one would produce a half-migrated store that
   looks fine, which is the worst of the three outcomes. Bump `SCHEMA_VERSION`

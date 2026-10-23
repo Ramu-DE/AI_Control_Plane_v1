@@ -1,4 +1,5 @@
-import { GraphSourceRecord } from "./types";
+import { durableSingleton } from "./persist";
+import type { GraphSourceRecord } from "./types";
 
 function seedGraphSources(): GraphSourceRecord[] {
   const now = new Date().toISOString();
@@ -39,12 +40,15 @@ function seedGraphSources(): GraphSourceRecord[] {
   ];
 }
 
-const globalForGraphStore = globalThis as unknown as {
-  __graphSources?: GraphSourceRecord[];
-};
+// Durable: an approved Graph Source with its credentials wired is exactly the
+// state nobody wants to rebuild. Two smoke-test checks skip today for want of
+// "an Approved neo4j source" — losing that on every restart is why.
+const durable = durableSingleton<GraphSourceRecord[]>({
+  cacheKey: "__graphSources",
+  fileSuffix: ".graph",
+  label: "graph-sources",
+  seed: seedGraphSources,
+});
 
-export const graphSources =
-  globalForGraphStore.__graphSources ?? seedGraphSources();
-if (!globalForGraphStore.__graphSources) {
-  globalForGraphStore.__graphSources = graphSources;
-}
+export const graphSources = durable.state;
+export const flushGraphSources = durable.flush;

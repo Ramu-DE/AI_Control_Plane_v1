@@ -146,9 +146,25 @@ export function trackChanges<T extends object>(target: T, onChange: () => void):
 
   const wrap = (value: unknown): unknown => {
     if (value === null || typeof value !== "object") return value;
-    // Dates and other exotic objects are left alone: JSON round-trips them as
-    // strings anyway, and proxying them breaks internal-slot access.
-    if (value instanceof Date || value instanceof RegExp) return value;
+    // EXOTIC OBJECTS ARE LEFT ALONE, and this is not just an optimisation.
+    //
+    // These traps run methods with `this = receiver` (the proxy), which is
+    // required so array methods see proxied elements. But Map and Set methods
+    // read an internal slot, so `map.get(k)` through a proxy throws
+    // "Method Map.prototype.get called on incompatible receiver". Verified.
+    //
+    // The cost of skipping them is that mutations INSIDE a Map are invisible
+    // here, so a store built on Maps must mark itself dirty explicitly — see
+    // LocalGraphControlStore. Dates and RegExps have the same slot problem and
+    // are immutable in practice.
+    if (
+      value instanceof Date ||
+      value instanceof RegExp ||
+      value instanceof Map ||
+      value instanceof Set
+    ) {
+      return value;
+    }
     const existing = cache.get(value as object);
     if (existing) return existing;
 
@@ -301,4 +317,101 @@ export function capLog<T>(items: T[], max: number): number {
   // The array is newest-first, so the tail is the oldest.
   items.splice(max, dropped);
   return dropped;
+}
+
+// --------------------------------------------------------------------------- //
+// Durable singletons
+// --------------------------------------------------------------------------- //
+
+export interface DurableSingletonOptions<T extends object, W extends object = T> {
+  /** Key on globalThis, so the value survives `next dev` hot-reloads. */
+  cacheKey: string;
+  /** Appended to the base snapshot path, e.g. ".graph" -> store.graph.json. */
+  fileSuffix: string;
+  seed: () => T;
+  /** Short name for log lines. */
+  label: string;
+  /**
+   * Convert to and from a JSON-safe shape. REQUIRED for any state holding a
+   * Map or a Set: `JSON.stringify(new Map([["a",1]]))` is `{}`, so without
+   * these the snapshot silently loses everything. Verified, not assumed.
+   */
+  toJSON?: (state: T) => W;
+  fromJSON?: (raw: W) => T | null;
+  /**
+   * False for state whose mutations cannot be observed by a Proxy (Maps), so
+   * the owner calls `markDirty` itself.
+   */
+  track?: boolean;
+}
+
+export interface DurableSingleton<T> {
+  state: T;
+  markDirty: () => void;
+  flush: () => void;
+  stats: () => { writes: number; failures: number; dirty: boolean };
+  path: string;
+  bootNote: string;
+}
+
+/**
+ * Boot one durable singleton: restore, else seed; then persist on change.
+ *
+ * Each singleton gets its OWN file rather than sharing one. They already have
+ * independent lifecycles and seeds, and a shared file would mean a write to
+ * any of them rewrites all of them — plus one corrupt section would discard
+ * four stores instead of one.
+ */
+export function durableSingleton<T extends object, W extends object = T>(
+  opts: DurableSingletonOptions<T, W>
+): DurableSingleton<T> {
+  const g = globalThis as unknown as Record<string, unknown>;
+  const path = storePath().replace(/\.json$/, "") + `${opts.fileSuffix}.json`;
+  const persisterKey = `${opts.cacheKey}__persister`;
+
+  let bootNote = "";
+  if (!g[opts.cacheKey]) {
+    const loaded = loadSnapshot<W>(path);
+    let restored: T | null = null;
+    if (loaded.state !== null) {
+      try {
+        restored = opts.fromJSON
+          ? opts.fromJSON(loaded.state)
+          : (loaded.state as unknown as T);
+      } catch (e) {
+        // A snapshot that parses but cannot be rebuilt into the live shape is
+        // as untrustworthy as a corrupt one. Seed, and say so.
+        restored = null;
+        bootNote = `${opts.label}: snapshot could not be rebuilt ` +
+          `(${(e as Error).message}); seeding`;
+      }
+    }
+    g[opts.cacheKey] = restored ?? opts.seed();
+    if (!bootNote) {
+      bootNote = restored ? `${opts.label}: ${loaded.reason}` : `${opts.label}: ${loaded.reason}`;
+    }
+  }
+
+  const raw = g[opts.cacheKey] as T;
+
+  if (!g[persisterKey]) {
+    g[persisterKey] = createPersister<W>({
+      getState: () => (opts.toJSON ? opts.toJSON(raw) : (raw as unknown as W)),
+      path,
+      onEvent: (m) => console.warn(`[${opts.label}] ${m}`),
+    });
+    flushOnExit(g[persisterKey] as Persister);
+    if (bootNote) console.log(`[store] ${bootNote}`);
+  }
+  const persister = g[persisterKey] as Persister;
+
+  return {
+    state:
+      opts.track === false ? raw : trackChanges(raw, persister.markDirty),
+    markDirty: persister.markDirty,
+    flush: persister.flush,
+    stats: persister.stats,
+    path,
+    bootNote,
+  };
 }

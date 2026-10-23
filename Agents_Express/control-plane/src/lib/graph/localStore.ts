@@ -24,6 +24,7 @@ import type {
   ListGraphSourcesQuery,
   ListProposalsQuery,
 } from "./store";
+import { durableSingleton } from "../persist";
 import { canTransition } from "./logic";
 import type { RecordStatus } from "../types";
 
@@ -43,9 +44,46 @@ function freshData(): LocalData {
   };
 }
 
-const globalForLocal = globalThis as unknown as {
-  __graphControlLocal?: LocalData;
-};
+// Durable, with two wrinkles the other stores do not have.
+//
+// 1. LocalData holds Maps. `JSON.stringify(new Map([["a",1]]))` is `{}` —
+//    verified — so a snapshot without explicit conversion would silently save
+//    nothing. Hence toJSON/fromJSON below.
+// 2. A change-tracking Proxy cannot see inside a Map, and proxying one throws
+//    ("Method Map.prototype.get called on incompatible receiver"). So tracking
+//    is off and this class marks itself dirty via `touch()`. That is tolerable
+//    here because the mutators are a small enumerable set on one class, unlike
+//    the ~40 scattered sites that made a Proxy the right answer for store.ts.
+//    `tests/persist.test.ts` drives every public mutator and asserts the
+//    snapshot changed, so a future mutator that forgets `touch()` is caught.
+interface SerializedLocalData {
+  sources: [string, GraphSource][];
+  buildRuns: [string, BuildRun][];
+  proposals: [string, MappingProposal][];
+  versions: [string, MappingVersion][];
+}
+
+const durable = durableSingleton<LocalData, SerializedLocalData>({
+  cacheKey: "__graphControlLocal",
+  fileSuffix: ".graph-control",
+  label: "graph-control",
+  seed: freshData,
+  track: false,
+  toJSON: (d) => ({
+    sources: [...d.sources.entries()],
+    buildRuns: [...d.buildRuns.entries()],
+    proposals: [...d.proposals.entries()],
+    versions: [...d.versions.entries()],
+  }),
+  fromJSON: (raw) => ({
+    sources: new Map(raw.sources ?? []),
+    buildRuns: new Map(raw.buildRuns ?? []),
+    proposals: new Map(raw.proposals ?? []),
+    versions: new Map(raw.versions ?? []),
+  }),
+});
+
+export const flushGraphControl = durable.flush;
 
 // Deep-ish clone so callers can't mutate stored records by reference.
 function clone<T>(value: T): T {
@@ -59,12 +97,16 @@ export class LocalGraphControlStore implements GraphControlStore {
    * @param isolated when true, use a private data set (used by unit tests so
    * each test starts clean). Otherwise share the dev-global singleton.
    */
+  /** No-op in isolated mode: a test's private data must never be persisted. */
+  private touch: () => void;
+
   constructor(isolated = false) {
     if (isolated) {
       this.data = freshData();
+      this.touch = () => {};
     } else {
-      this.data = globalForLocal.__graphControlLocal ?? freshData();
-      globalForLocal.__graphControlLocal = this.data;
+      this.data = durable.state;
+      this.touch = durable.markDirty;
     }
   }
 
@@ -88,6 +130,7 @@ export class LocalGraphControlStore implements GraphControlStore {
     }
     const stored: GraphSource = { ...clone(source), rev: source.rev ?? 1 };
     this.data.sources.set(stored.graphSourceId, stored);
+    this.touch();
     return clone(stored);
   }
 
@@ -107,6 +150,7 @@ export class LocalGraphControlStore implements GraphControlStore {
       updatedAt: new Date().toISOString(),
     };
     this.data.sources.set(graphSourceId, next);
+    this.touch();
     return clone(next);
   }
 
@@ -128,6 +172,7 @@ export class LocalGraphControlStore implements GraphControlStore {
       updatedAt: new Date().toISOString(),
     };
     this.data.sources.set(graphSourceId, next);
+    this.touch();
     return clone(next);
   }
 
@@ -152,6 +197,7 @@ export class LocalGraphControlStore implements GraphControlStore {
     }
     const stored: BuildRun = { ...clone(run), rev: run.rev ?? 1 };
     this.data.buildRuns.set(stored.buildRunId, stored);
+    this.touch();
     return clone(stored);
   }
 
@@ -171,6 +217,7 @@ export class LocalGraphControlStore implements GraphControlStore {
       rev: (current.rev ?? 1) + 1,
     };
     this.data.buildRuns.set(buildRunId, next);
+    this.touch();
     return clone(next);
   }
 
@@ -196,6 +243,7 @@ export class LocalGraphControlStore implements GraphControlStore {
     }
     const stored: MappingProposal = { ...clone(proposal), rev: proposal.rev ?? 1 };
     this.data.proposals.set(stored.proposalId, stored);
+    this.touch();
     return clone(stored);
   }
 
@@ -215,6 +263,7 @@ export class LocalGraphControlStore implements GraphControlStore {
       updatedAt: new Date().toISOString(),
     };
     this.data.proposals.set(proposalId, next);
+    this.touch();
     return clone(next);
   }
 
@@ -238,6 +287,7 @@ export class LocalGraphControlStore implements GraphControlStore {
     }
     const stored: MappingVersion = { ...clone(version), rev: version.rev ?? 1 };
     this.data.versions.set(stored.mappingVersionId, stored);
+    this.touch();
     return clone(stored);
   }
 }

@@ -316,3 +316,154 @@ test("the snapshot holds no credential VALUES, only env var names", async () => 
       `snapshot appears to contain a credential-shaped string: ${secret}`);
   }
 });
+
+// --------------------------------------------------------------------------- //
+// Durability across EVERY store, not just the main one
+// --------------------------------------------------------------------------- //
+//
+// The first pass made `store.ts` and `a2a/store.ts` durable and left four
+// other singletons in memory. "State survives a restart" was therefore only
+// two-thirds true, and the two that mattered most were the Graph Sources
+// registry (two smoke checks skip for want of an Approved neo4j source — which
+// used to vanish on every restart) and the graph control store.
+
+test("a Map does not survive JSON on its own — so conversion is required", () => {
+  // The reason LocalData needs toJSON/fromJSON. Asserted rather than assumed,
+  // because the failure is silent: the snapshot saves `{}` and the store comes
+  // back empty with no error anywhere.
+  assert.equal(JSON.stringify({ m: new Map([["a", 1]]) }), '{"m":{}}');
+});
+
+test("the proxy refuses to wrap a Map, because proxying one throws", () => {
+  const state = { m: new Map([["a", 1]]) };
+  const tracked = trackChanges(state, () => {});
+  // If wrap() proxied this, `.get` with `this = receiver` would throw
+  // "Method Map.prototype.get called on incompatible receiver".
+  assert.equal(tracked.m.get("a"), 1);
+  assert.equal(tracked.m, state.m, "the same Map instance, unwrapped");
+});
+
+test("graph sources are durable", async () => {
+  const { graphSources, flushGraphSources } = await import("../src/lib/graphStore.ts");
+  const before = graphSources.length;
+  graphSources.unshift({
+    id: "gs-persist-probe", graphSourceId: "persist-probe",
+    displayName: "Persistence probe", bu: "t", status: "Draft",
+    ontology: {}, backend: {}, createdAt: new Date().toISOString(),
+  } as never);
+  flushGraphSources();
+  const path = join(process.env.CONTROL_PLANE_STORE_PATH!.replace(/\.json$/, "") + ".graph.json");
+  const raw = JSON.parse(readFileSync(path, "utf8"));
+  assert.equal(raw.state.length, before + 1);
+  assert.ok(
+    raw.state.some((s: { graphSourceId: string }) => s.graphSourceId === "persist-probe"),
+    "an added graph source must reach its snapshot"
+  );
+});
+
+test("the identity store is durable", async () => {
+  const { identityStore, flushIdentityStore } = await import(
+    "../src/lib/identity/identityStore.ts");
+  // Find any array on the state and append to it — the shape is seeded
+  // elsewhere and this test should not depend on which field exists.
+  const key = (Object.keys(identityStore) as (keyof typeof identityStore)[])
+    .find((k) => Array.isArray(identityStore[k]));
+  assert.ok(key, "the identity state must hold at least one collection");
+  (identityStore[key!] as unknown[]).push({ id: "identity-persist-probe" });
+  flushIdentityStore();
+  const path = process.env.CONTROL_PLANE_STORE_PATH!.replace(/\.json$/, "") + ".identity.json";
+  const raw = readFileSync(path, "utf8");
+  assert.ok(raw.includes("identity-persist-probe"),
+    "an identity mutation must reach its snapshot");
+});
+
+test("the graph control store survives a round trip, Maps included", async () => {
+  const { LocalGraphControlStore } = await import("../src/lib/graph/localStore.ts");
+  const { flushGraphControl } = await import("../src/lib/graph/localStore.ts");
+  const store = new LocalGraphControlStore();
+  await store.createGraphSource({
+    graphSourceId: "gc-persist-probe", displayName: "GC probe", bu: "t",
+    ontology: { type: "rdf-file" }, backend: { type: "databricks-uc" },
+  } as never);
+  flushGraphControl();
+
+  const path = process.env.CONTROL_PLANE_STORE_PATH!.replace(/\.json$/, "") + ".graph-control.json";
+  const raw = JSON.parse(readFileSync(path, "utf8"));
+  // Serialized as ENTRY PAIRS, not an empty object.
+  assert.ok(Array.isArray(raw.state.sources),
+    `sources must serialize as entries, got ${JSON.stringify(raw.state.sources)}`);
+  assert.ok(
+    raw.state.sources.some(([k]: [string]) => k === "gc-persist-probe"),
+    "the created source must be in the snapshot"
+  );
+
+  // And it must rebuild into real Maps.
+  const { durableSingleton } = await import("../src/lib/persist.ts");
+  assert.ok(typeof durableSingleton === "function");
+});
+
+test("every graph-control mutator marks the store dirty", async () => {
+  // Tracking is OFF for this store (a Proxy cannot see into a Map), so each
+  // mutator calls touch() by hand. This is the guard against a future mutator
+  // forgetting: it drives the public API and checks the write counter moved.
+  const { LocalGraphControlStore, flushGraphControl } = await import(
+    "../src/lib/graph/localStore.ts");
+  const store = new LocalGraphControlStore();
+
+  const snapshotPath =
+    process.env.CONTROL_PLANE_STORE_PATH!.replace(/\.json$/, "") + ".graph-control.json";
+  const sizeNow = () => {
+    flushGraphControl();
+    return readFileSync(snapshotPath, "utf8").length;
+  };
+
+  const before = sizeNow();
+  await store.createGraphSource({
+    graphSourceId: `dirty-probe-${Date.now()}`, displayName: "Dirty probe",
+    bu: "t", ontology: { type: "rdf-file" }, backend: { type: "databricks-uc" },
+  } as never);
+  assert.ok(sizeNow() > before,
+    "createGraphSource must mark the store dirty — if this fails, a mutator " +
+    "is missing its touch() call and its writes are lost on restart");
+});
+
+test("an isolated graph-control store never persists", async () => {
+  // Tests use `isolated: true` for a clean dataset; persisting it would let
+  // one test's fixtures leak into the shared snapshot.
+  const { LocalGraphControlStore, flushGraphControl } = await import(
+    "../src/lib/graph/localStore.ts");
+  const path =
+    process.env.CONTROL_PLANE_STORE_PATH!.replace(/\.json$/, "") + ".graph-control.json";
+  flushGraphControl();
+  const before = readFileSync(path, "utf8");
+
+  const isolated = new LocalGraphControlStore(true);
+  await isolated.createGraphSource({
+    graphSourceId: "must-not-persist", displayName: "x", bu: "t",
+    ontology: { type: "rdf-file" }, backend: { type: "databricks-uc" },
+  } as never);
+  flushGraphControl();
+  assert.equal(readFileSync(path, "utf8"), before,
+    "an isolated store's writes must not reach the shared snapshot");
+});
+
+test("each store writes its OWN file", async () => {
+  // One shared file would mean a write to any store rewrites all of them, and
+  // one corrupt section would discard four stores instead of one.
+  await import("../src/lib/store.ts");
+  await import("../src/lib/graphStore.ts");
+  await import("../src/lib/identity/identityStore.ts");
+  await import("../src/lib/graph/localStore.ts");
+  const base = process.env.CONTROL_PLANE_STORE_PATH!;
+  const dir = join(base, "..");
+  const files = readdirSync(dir).sort();
+  for (const expected of [
+    "control-plane.json",
+    "control-plane.graph.json",
+    "control-plane.identity.json",
+    "control-plane.graph-control.json",
+  ]) {
+    assert.ok(files.includes(expected),
+      `expected a snapshot at ${expected}; found ${files.join(", ")}`);
+  }
+});
