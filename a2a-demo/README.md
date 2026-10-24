@@ -1,5 +1,7 @@
 # Sales ↔ Supply Chain — A2A Multi-Agent Demo
 
+> **Module guide (every file explained, flow, connections):** [`docs/modules/a2a-demo/`](../docs/modules/a2a-demo/README.md)
+
 Two autonomous agents that collaborate as **peers** over the **A2A protocol**,
 reason on **Amazon Bedrock**, and share a **multi-tier memory** layer. Governed
 and orchestrated by the **Agent Management Platform**.

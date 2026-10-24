@@ -1,20 +1,36 @@
 # AI Control Plane — modules and how they connect
 
+Every module has its **own folder here** under `docs/modules/<module>/`, with a
+file-by-file explanation: why each file exists, what it does, the module's
+flow, and how it connects to the other modules.
+
+```
+docs/modules/
+├── README.md                  ← this map
+├── control-plane/             ← Agents_Express/control-plane (overview, lib, UI/API/tests)
+├── graph-utility/             ← graph-utility
+├── a2a-demo/                  ← a2a-demo
+├── saas-gaming-app/           ← saas-gaming-app
+├── saas-platform-configs/     ← saas-platform-configs
+├── saas-workloads/            ← saas-workloads
+└── agents-express-other/      ← Agents_Express (aws-audit, src stub, docs, images)
+```
+
 This repository is a governed, multi-tenant **agent control plane** for a
 regulated pharma organisation (Takeda BUs and business functions), plus the
 **knowledge-graph builder** it relies on, and reference material it was built
 from.
 
-| Module | What it is | Language | Guide |
+| Module (code) | What it is | Language | Guide folder |
 |---|---|---|---|
-| `Agents_Express/control-plane` | **The control plane**: UI + HTTP API. Registry, agents, workflows, Cedar policy, tenants, personas, graph sources, knowledge bases, A2A, memory. | TypeScript / Next.js 15 | [`guide/`](../Agents_Express/control-plane/docs/guide/README.md) |
-| `graph-utility` | **Ontology-first, dataset-agnostic knowledge-graph builder** (+ legacy OMDA query engine). Builds a graph from an ontology over any dataset; loads it into Neo4j and/or Neptune. | Python | [`MODULE_GUIDE.md`](../graph-utility/MODULE_GUIDE.md) |
-| `a2a-demo` | Reference A2A peer agents (Sales ⇄ Supply Chain) on Bedrock with shared memory. Reference only: not imported by the control plane. | Python | [`MODULE_GUIDE.md`](../a2a-demo/MODULE_GUIDE.md) |
-| `saas-gaming-app` | SaaS reference app: the source of the tenant-tier / middleware patterns the control plane's tenancy adopted. | TypeScript / Express | [`MODULE_GUIDE.md`](../saas-gaming-app/MODULE_GUIDE.md) |
-| `saas-platform-configs` | KRO ResourceGraphDefinitions + ArgoCD ApplicationSets for per-tenant provisioning (reference). | YAML | [`MODULE_GUIDE.md`](../saas-platform-configs/MODULE_GUIDE.md) |
-| `saas-workloads` | ArgoCD tenant ApplicationSets, KRO tenant instances, ACK examples, cluster policies (reference). | YAML | [`MODULE_GUIDE.md`](../saas-workloads/MODULE_GUIDE.md) |
-| `Agents_Express` (other) | AWS audit script, Python config stub, design docs, workshop screenshots. | Bash / Python / MD | [`OTHER_FILES_GUIDE.md`](../Agents_Express/OTHER_FILES_GUIDE.md) |
-| `docs/` | Cross-cutting runbooks and designs (this file, personas, KG flow, Neptune, BioMedical load, A2A runbook). | MD | — |
+| `Agents_Express/control-plane` | **The control plane**: UI + HTTP API. Registry, agents, workflows, Cedar policy, tenants, personas, graph sources, knowledge bases, A2A, memory. | TypeScript / Next.js 15 | [`control-plane/`](control-plane/README.md) |
+| `graph-utility` | **Ontology-first, dataset-agnostic knowledge-graph builder** (+ legacy OMDA query engine). Builds a graph from an ontology over any dataset; loads it into Neo4j and/or Neptune. | Python | [`graph-utility/`](graph-utility/README.md) |
+| `a2a-demo` | Reference A2A peer agents (Sales ⇄ Supply Chain) on Bedrock with shared memory. Reference only: not imported by the control plane. | Python | [`a2a-demo/`](a2a-demo/README.md) |
+| `saas-gaming-app` | SaaS reference app: the source of the tenant-tier / middleware patterns the control plane's tenancy adopted. | TypeScript / Express | [`saas-gaming-app/`](saas-gaming-app/README.md) |
+| `saas-platform-configs` | KRO ResourceGraphDefinitions + ArgoCD ApplicationSets for per-tenant provisioning (reference). | YAML | [`saas-platform-configs/`](saas-platform-configs/README.md) |
+| `saas-workloads` | ArgoCD tenant ApplicationSets, KRO tenant instances, ACK examples, cluster policies (reference). | YAML | [`saas-workloads/`](saas-workloads/README.md) |
+| `Agents_Express` (other) | AWS audit script, Python config stub, design docs, workshop screenshots. | Bash / Python / MD | [`agents-express-other/`](agents-express-other/README.md) |
+| `docs/` | Cross-cutting runbooks and designs (personas, KG flow, Neptune, BioMedical load, A2A runbook). This index lives in `docs/modules/`. | MD | — |
 
 ## The big picture
 
@@ -61,12 +77,12 @@ from.
 
 | If you want to… | Read |
 |---|---|
-| run everything locally | [`../SETUP.md`](../SETUP.md) |
-| understand tenants, personas, approvals, GxP | [`TENANT_PERSONAS.md`](TENANT_PERSONAS.md) |
-| understand how a graph is built and explored | [`KNOWLEDGE_GRAPH_FLOW.md`](KNOWLEDGE_GRAPH_FLOW.md), [`../graph-utility/docs/TAKEDA_BU_KG_DESIGN.md`](../graph-utility/docs/TAKEDA_BU_KG_DESIGN.md) |
-| register Neptune for agents | [`NEPTUNE_REGISTRY_SETUP.md`](NEPTUNE_REGISTRY_SETUP.md) |
-| load the BioMedical dataset | [`BIOMEDICAL_GRAPH_LOAD.md`](BIOMEDICAL_GRAPH_LOAD.md) |
-| the control plane, file by file | [`../Agents_Express/control-plane/docs/guide/`](../Agents_Express/control-plane/docs/guide/README.md) |
+| run everything locally | [`SETUP.md`](../../SETUP.md) |
+| understand tenants, personas, approvals, GxP | [`TENANT_PERSONAS.md`](../TENANT_PERSONAS.md) |
+| understand how a graph is built and explored | [`KNOWLEDGE_GRAPH_FLOW.md`](../KNOWLEDGE_GRAPH_FLOW.md), [`graph-utility/docs/TAKEDA_BU_KG_DESIGN.md`](../../graph-utility/docs/TAKEDA_BU_KG_DESIGN.md) |
+| register Neptune for agents | [`NEPTUNE_REGISTRY_SETUP.md`](../NEPTUNE_REGISTRY_SETUP.md) |
+| load the BioMedical dataset | [`BIOMEDICAL_GRAPH_LOAD.md`](../BIOMEDICAL_GRAPH_LOAD.md) |
+| the control plane, file by file | [`control-plane/`](control-plane/README.md) |
 
 ## What is real and what is a test harness
 

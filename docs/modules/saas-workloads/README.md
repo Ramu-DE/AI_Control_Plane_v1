@@ -1,5 +1,8 @@
 # saas-workloads — module guide
 
+> **Code:** [`saas-workloads/`](../../../saas-workloads) · **All modules:** [`docs/modules/`](../README.md)
+
+
 ## What it is for and why it is in this repository
 
 `saas-workloads` is the **tenant half** of the KRO + ArgoCD GitOps reference. The

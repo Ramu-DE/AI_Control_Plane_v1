@@ -1,5 +1,7 @@
 # Graph Utility — generic, multi-BU Ontology-Mediated Data Access (OMDA)
 
+> **Module guide (every file explained, flow, connections):** [`docs/modules/graph-utility/`](../docs/modules/graph-utility/README.md)
+
 A **reusable** utility that lets agents answer natural-language questions over a
 Business Unit's data **with precision**, by using a knowledge graph (ontology)
 as a *semantic map* and keeping the data in its system of record.

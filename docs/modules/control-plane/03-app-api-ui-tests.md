@@ -1,5 +1,8 @@
 # Control plane — UI, HTTP API, tests and live scripts
 
+> **Code:** [`Agents_Express/control-plane/`](../../../Agents_Express/control-plane) · **All modules:** [`docs/modules/`](../README.md)
+
+
 The control plane is a Next.js 15 (App Router, React 19) app. Its shape is:
 
 - **Pages** (`src/app/**/page.tsx`) are client components, apart from the Dashboard, which is a server component that reads `store` directly. They call the HTTP API with `getJSON` / `sendJSON` / `deleteJSON` from `src/lib/api.ts`. That module puts `NEXT_PUBLIC_BASE_PATH` in front of every URL. `next.config.mjs` derives `NEXT_PUBLIC_BASE_PATH` from `BASE_PATH`, so setting `BASE_PATH` on its own is enough to serve the app behind a prefix such as `/proxy/3000`. Every failed call is also passed to `onApiFailure` listeners, and `ApiErrorToast` (mounted once in `layout.tsx`) shows those refusals even on pages that never catch them.

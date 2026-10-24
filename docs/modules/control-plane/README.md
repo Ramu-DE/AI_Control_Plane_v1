@@ -1,5 +1,8 @@
 # Control plane — guide
 
+> **Code:** [`Agents_Express/control-plane/`](../../../Agents_Express/control-plane) · **All modules:** [`docs/modules/`](../README.md)
+
+
 The control plane is a Next.js 15 (App Router) application:
 
 - **UI pages:** `src/app/**/page.tsx`

@@ -1,5 +1,8 @@
 # a2a-demo — module guide
 
+> **Code:** [`a2a-demo/`](../../../a2a-demo) · **All modules:** [`docs/modules/`](../README.md)
+
+
 ## What it is for and why it is in this repository
 
 `a2a-demo` is a small **reference implementation** of two peer agents, a

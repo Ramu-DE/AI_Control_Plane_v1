@@ -1,5 +1,7 @@
 # AgentExpress Control Plane
 
+> **Module guide (every file explained, flow, connections):** [`docs/modules/control-plane/`](../../docs/modules/control-plane/README.md)
+
 A modern, full-stack **control plane UI** that unifies the two AWS agentic workshops
 into one application you can run yourself:
 

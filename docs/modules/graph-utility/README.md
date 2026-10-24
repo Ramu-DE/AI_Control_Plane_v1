@@ -1,5 +1,8 @@
 # graph-utility — module guide
 
+> **Code:** [`graph-utility/`](../../../graph-utility) · **All modules:** [`docs/modules/`](../README.md)
+
+
 A file-by-file map of `graph-utility/`. Each description comes from reading the code. The design rationale is in `README.md`, `ARCHITECTURE.md`, `docs/ONTOLOGY_FIRST.md` and `docs/TAKEDA_BU_KG_DESIGN.md`.
 
 ---

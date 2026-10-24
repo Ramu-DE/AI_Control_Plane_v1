@@ -1,5 +1,7 @@
 # SaaS Gaming Application
 
+> **Module guide (every file explained, flow, connections):** [`docs/modules/saas-gaming-app/`](../docs/modules/saas-gaming-app/README.md)
+
 A multi-tenant SaaS gaming application built for the EKS Platform Engineering workshop. This application demonstrates how to build a scalable, cloud-native gaming platform using Amazon EKS, S3, and DynamoDB.
 
 ## Features

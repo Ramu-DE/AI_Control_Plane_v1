@@ -1,5 +1,8 @@
 # Control plane — `src/lib` (domain logic)
 
+> **Code:** [`Agents_Express/control-plane/src/lib/`](../../../Agents_Express/control-plane/src/lib) · **All modules:** [`docs/modules/`](../README.md)
+
+
 `src/lib/` holds all of the control plane's domain logic: authorization, tenancy, registry and approval rules, workflow execution, model invocation, tool execution, graph and knowledge-base access, memory, A2A, and persistence. The API routes in `src/app/api/**/route.ts` are thin wrappers. They parse the request, call into `lib/`, and map typed errors to HTTP statuses. Many `lib/` modules are deliberately **pure** (no store access, no I/O) so `tests/` can exercise them offline, and some are client-safe so forms can apply the same rules as the server (`plane.ts`, `modelAccess.ts`, `workflow/eligibility.ts`). The server-only modules are the ones that compose those pure rules with the store, the network, and audit.
 
 ---

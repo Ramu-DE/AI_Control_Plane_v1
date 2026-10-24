@@ -1,5 +1,8 @@
 # saas-platform-configs — module guide
 
+> **Code:** [`saas-platform-configs/`](../../../saas-platform-configs) · **All modules:** [`docs/modules/`](../README.md)
+
+
 ## What it is for and why it is in this repository
 
 `saas-platform-configs` is the **platform half** of a KRO + ArgoCD GitOps setup for

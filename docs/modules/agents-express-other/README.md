@@ -1,5 +1,8 @@
 # Agents_Express (outside control-plane) — module guide
 
+> **Code:** [`Agents_Express/`](../../../Agents_Express) · **All modules:** [`docs/modules/`](../README.md)
+
+
 ## What it is for and why it is in this repository
 
 `Agents_Express/` holds the AgentControl control plane (`control-plane/`, a Next.js app,

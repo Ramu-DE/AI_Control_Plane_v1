@@ -1,5 +1,8 @@
 # saas-gaming-app — module guide
 
+> **Code:** [`saas-gaming-app/`](../../../saas-gaming-app) · **All modules:** [`docs/modules/`](../README.md)
+
+
 ## What it is for and why it is in this repository
 
 `saas-gaming-app` is a multi-tenant SaaS reference application from the AWS "EKS Platform Engineering" workshop (`package.json` author "AWS Workshop"). It is an Express + TypeScript number-guessing game (1-100, 10 guesses, starting score 1000) backed by DynamoDB, S3, CloudWatch and, optionally, Amazon Bedrock. One container image serves exactly one tenant; tenant identity and tier come from environment variables (`TENANT_ID`, `TENANT_NAME`, `TENANT_TIER`).
