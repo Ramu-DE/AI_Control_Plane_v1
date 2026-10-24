@@ -9,7 +9,8 @@
 // returned to a browser and never accepted from one: the control plane is the
 // only party that may tell IDP which file to read.
 
-import type { FdField, FdTable } from "./contract";
+import type { FdField, FdRoute, FdTable } from "./contract";
+import type { ValidationResult } from "./validation";
 
 export type DocumentJobStatus =
   | "uploaded"
@@ -72,6 +73,16 @@ export interface DocumentJob {
   submittedBy?: string;
   submittedAt?: string;
   sentBackNote?: string;
+  /** Document Type in force: chosen at upload, or detected from classification. */
+  documentTypeId?: string;
+  documentTypeVersion?: number;
+  typeSource?: "chosen" | "detected";
+  /** Latest validation against that type (re-run on every review save). */
+  validation?: ValidationResult;
+  /** How the document travelled: straight-through, auto-finalized, exception, or manual (no type). */
+  route?: FdRoute;
+  /** Submitted despite blocking issues: who and why. */
+  override?: { by: string; justification: string; at: string };
   /** Finalized versions, oldest first. */
   finalizedDocumentIds: string[];
 }

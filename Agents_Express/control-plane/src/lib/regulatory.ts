@@ -30,6 +30,8 @@ export const REGULATED_ACTIONS = [
   "processDocument",
   "reviewDocument",
   "finalizeDocument",
+  "manageDocumentType",
+  "approveDocumentType",
   "viewCorpus",
   "manageCorpus",
   "approveCorpus",
@@ -45,7 +47,9 @@ export const APPROVALS_TOOL = "approvals";
 export const APPROVE_RECORD_ACTION = "approveRecord";
 /** Document Intelligence (IDP) actions, all on the perimeter tool below. */
 export const DOCINTEL_TOOL = "docintel";
-export const DOCINTEL_ACTIONS = ["viewDocument", "processDocument", "reviewDocument", "finalizeDocument"] as const;
+export const DOCINTEL_ACTIONS = [
+  "viewDocument", "processDocument", "reviewDocument", "finalizeDocument", "manageDocumentType", "approveDocumentType",
+] as const;
 /** RAG Factory actions (corpora built from finalized documents), on the perimeter tool below. */
 export const RAG_FACTORY_TOOL = "ragfactory";
 export const RAG_FACTORY_ACTIONS = ["viewCorpus", "manageCorpus", "approveCorpus", "queryCorpus"] as const;
@@ -153,7 +157,7 @@ export function upgradeRegulatoryPolicies(policies: Policy[], createdAt: string)
       policies.push(p);
       changes.push(`added ${p.id}`);
     } else if (
-      (p.id === "pol-gw-gxp-training" || p.id === "pol-gw-data-residency") &&
+      ["pol-gw-gxp-training", "pol-gw-data-residency", "pol-gw-docintel", "pol-gw-ragfactory"].includes(p.id) &&
       existing.cedar !== p.cedar &&
       isOlderSeed(existing.cedar, p.cedar)
     ) {

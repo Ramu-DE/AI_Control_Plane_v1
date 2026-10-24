@@ -29,6 +29,29 @@ export async function GET(req: NextRequest) {
           createdAt: j.submittedAt ?? j.createdAt,
         }))
     : [];
+  // Exceptions: documents whose validation failed, worst first. Work for an
+  // analyst (fix or justify), so the inbox offers Open, not a decision.
+  const documentExceptions = known
+    ? listJobs(personaId)
+        .filter((j) => j.route === "exception" && ["extracted", "in-review"].includes(j.status))
+        .map((j) => {
+          const issues = j.validation?.issues ?? [];
+          const blocking = issues.filter((i) => i.severity === "block").length;
+          return {
+            id: j.documentId,
+            kind: "document-exception" as const,
+            name: j.fileName,
+            detail: `${j.tenantId}: ${blocking} blocking, ${issues.length - blocking} warning(s)` +
+              (issues[0] ? ` (${issues[0].message.slice(0, 90)})` : ""),
+            status: "Needs review",
+            owner: nameOf(j.createdBy),
+            tenantId: j.tenantId,
+            createdAt: j.updatedAt,
+            blocking,
+          };
+        })
+        .sort((a, b) => b.blocking - a.blocking)
+    : [];
   const corpusPending = known
     ? listCorpora(personaId)
         .filter((c) => c.status === "Pending approval")
@@ -70,12 +93,13 @@ export async function GET(req: NextRequest) {
     }));
 
   return NextResponse.json({
-    items: [...documentPending, ...corpusPending, ...registryPending, ...policyReview],
+    items: [...documentPending, ...documentExceptions, ...corpusPending, ...registryPending, ...policyReview],
     counts: {
-      total: documentPending.length + corpusPending.length + registryPending.length + policyReview.length,
+      total: documentPending.length + documentExceptions.length + corpusPending.length + registryPending.length + policyReview.length,
       registry: registryPending.length,
       policy: policyReview.length,
       documents: documentPending.length,
+      exceptions: documentExceptions.length,
       corpora: corpusPending.length,
     },
   });

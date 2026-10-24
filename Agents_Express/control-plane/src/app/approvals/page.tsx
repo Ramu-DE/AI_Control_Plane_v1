@@ -8,7 +8,7 @@ import { ActingAsSelect, useActingPersona } from "@/components/ActingAs";
 
 interface ApprovalItem {
   id: string;
-  kind: "registry-record" | "library-policy" | "document" | "corpus";
+  kind: "registry-record" | "library-policy" | "document" | "document-exception" | "corpus";
   name: string;
   detail: string;
   status: string;
@@ -20,13 +20,14 @@ interface ApprovalItem {
 
 const KIND_LABEL: Record<ApprovalItem["kind"], string> = {
   document: "Document",
+  "document-exception": "Exception",
   corpus: "RAG corpus",
   "registry-record": "Registry",
   "library-policy": "Policy",
 };
 
 function openHref(it: ApprovalItem): string | null {
-  if (it.kind === "document") return `/documents?doc=${encodeURIComponent(it.id)}`;
+  if (it.kind === "document" || it.kind === "document-exception") return `/documents?doc=${encodeURIComponent(it.id)}`;
   if (it.kind === "corpus") return `/rag?corpus=${encodeURIComponent(it.id)}`;
   return null;
 }
@@ -118,7 +119,7 @@ export default function ApprovalsPage() {
 
   const registry = items.filter((i) => i.kind === "registry-record");
   const policy = items.filter((i) => i.kind === "library-policy");
-  const docs = items.filter((i) => i.kind === "document" || i.kind === "corpus");
+  const docs = items.filter((i) => i.kind === "document" || i.kind === "document-exception" || i.kind === "corpus");
 
   return (
     <>
@@ -189,15 +190,15 @@ export default function ApprovalsPage() {
                         {openHref(it) && (
                           <Link className="btn-ghost" href={openHref(it)!}>Open</Link>
                         )}
-                        <button
+                        {it.kind !== "document-exception" && <button
                           type="button"
                           className="btn-primary"
                           disabled={busy === it.id || (!!it.submittedBy && it.submittedBy === acting.personaId)}
                           onClick={() => act(it, "approve")}
                         >
                           {it.kind === "document" ? "Finalize" : it.kind === "corpus" ? "Approve & build" : "Approve"}
-                        </button>
-                        {it.kind !== "library-policy" && (
+                        </button>}
+                        {it.kind !== "library-policy" && it.kind !== "document-exception" && (
                           <button
                             type="button"
                             className="btn-ghost"

@@ -17,7 +17,7 @@ import type { DocumentJob, MethodRun } from "../src/lib/docintel/model.ts";
 import { publicJob } from "../src/lib/docintel/model.ts";
 import {
   DocIntelError, bestRun, buildFinalizedDocument, finalize, listJobs, saveReview, sendBack,
-  startRun, submitForFinalization,
+  setMasterDataLookup, startRun, submitForFinalization,
 } from "../src/lib/docintel/service.ts";
 import { store } from "../src/lib/store.ts";
 
@@ -42,6 +42,9 @@ function job(over: Partial<DocumentJob> = {}): DocumentJob {
     review: draftReview(RUN, "persona-priya"), finalizedDocumentIds: [], ...over,
   };
 }
+
+// Never reach Unity Catalog from unit tests.
+setMasterDataLookup(async () => true);
 
 const noPublish = async () => ({ status: "skipped" as const, detail: "test" });
 
@@ -146,11 +149,11 @@ test("the engine's storage reference is never public", () => {
 test("finalization is four-eyes, approver-only, and versioned", async () => {
   const j = job();
   store.documentJobs.unshift(j);
-  assert.throws(() => submitForFinalization(j.documentId, "persona-sofia"), (e: DocIntelError) => e.status === 403,
+  await assert.rejects(submitForFinalization(j.documentId, "persona-sofia"), (e: DocIntelError) => e.status === 403,
     "a persona outside the tenant cannot submit");
-  submitForFinalization(j.documentId, "persona-priya");
+  await submitForFinalization(j.documentId, "persona-priya");
   assert.equal(j.status, "pending-finalization");
-  assert.throws(() => saveReview({ documentId: j.documentId, personaId: "persona-priya" }), /cannot be reviewed/,
+  await assert.rejects(saveReview({ documentId: j.documentId, personaId: "persona-priya" }), /cannot be reviewed/,
     "a pending document is locked");
 
   await assert.rejects(finalize(j.documentId, "persona-priya", null, noPublish), (e: DocIntelError) => e.code === "SELF_REVIEW");
@@ -165,8 +168,8 @@ test("finalization is four-eyes, approver-only, and versioned", async () => {
   assert.deepEqual(validateFinalizedDocument(rec.doc), []);
 
   // A correction is a new version that supersedes the first.
-  saveReview({ documentId: j.documentId, personaId: "persona-priya", edits: { docType: "credit-note" } });
-  submitForFinalization(j.documentId, "persona-priya");
+  await saveReview({ documentId: j.documentId, personaId: "persona-priya", edits: { docType: "credit-note" } });
+  await submitForFinalization(j.documentId, "persona-priya");
   const v2 = await finalize(j.documentId, "persona-daniel", null, noPublish);
   assert.equal(v2.doc.version, 2);
   assert.equal(v2.doc.supersedes, rec.doc.finalizedDocumentId);
@@ -177,13 +180,13 @@ test("finalization is four-eyes, approver-only, and versioned", async () => {
 test("an analyst cannot send back or finalize; a failed publish is recorded, not lost", async () => {
   const j = job();
   store.documentJobs.unshift(j);
-  submitForFinalization(j.documentId, "persona-priya");
+  await submitForFinalization(j.documentId, "persona-priya");
   assert.throws(() => sendBack(j.documentId, "persona-priya", "no"), (e: DocIntelError) => e.status === 403);
   sendBack(j.documentId, "persona-daniel", "fix the total");
   assert.equal(j.status, "in-review");
   assert.equal(j.sentBackNote, "fix the total");
 
-  submitForFinalization(j.documentId, "persona-priya");
+  await submitForFinalization(j.documentId, "persona-priya");
   const rec = await finalize(j.documentId, "persona-daniel", null, async () => { throw new Error("warehouse down"); });
   assert.equal(rec.delta.status, "failed");
   assert.match(rec.delta.detail ?? "", /warehouse down/);

@@ -67,6 +67,20 @@ export interface FinalizedDocument {
     reviewNote?: string | null;
   };
   contentSha256: string;
+  /** The Document Type the document was checked against (optional, additive). */
+  documentType?: { id: string; key: string; name: string; version: number } | null;
+  /** Outcome of the type's validation at finalization (optional, additive). */
+  validation?: FdValidation | null;
+}
+
+export type FdRoute = "straight-through" | "auto-finalized" | "exception" | "manual";
+
+export interface FdValidation {
+  clean: boolean;
+  route: FdRoute;
+  issues: { ruleId: string; severity: "block" | "warn"; field?: string; message: string }[];
+  /** A person submitted despite blocking issues, with a recorded reason. */
+  override?: { by: FdActor; justification: string; at: string } | null;
 }
 
 /** JSON with object keys sorted at every level — the input to the content hash. */
@@ -147,6 +161,25 @@ export function validateFinalizedDocument(doc: unknown): string[] {
   need(pv && typeof pv.submittedAt === "string" && ISO.test(pv.submittedAt), "provenance.submittedAt must be an ISO-8601 UTC timestamp");
   need(pv && typeof pv.finalizedAt === "string" && ISO.test(pv.finalizedAt), "provenance.finalizedAt must be an ISO-8601 UTC timestamp");
 
+  if (d.documentType) {
+    const t = d.documentType;
+    need(typeof t.id === "string" && typeof t.key === "string" && typeof t.name === "string" && Number.isInteger(t.version) && t.version >= 1,
+      "documentType needs id, key, name and an integer version >= 1");
+  }
+  if (d.validation) {
+    const v = d.validation;
+    need(typeof v.clean === "boolean", "validation.clean must be boolean");
+    need(["straight-through", "auto-finalized", "exception", "manual"].includes(v.route), "validation.route is not a known route");
+    need(Array.isArray(v.issues) && v.issues.every((i) => typeof i?.ruleId === "string" && ["block", "warn"].includes(i?.severity) && typeof i?.message === "string"),
+      "validation.issues must be {ruleId, severity block|warn, message}");
+    if (v.override) {
+      need(typeof v.override.justification === "string" && v.override.justification.trim().length >= 10,
+        "validation.override.justification must explain the override (10+ characters)");
+      need(typeof v.override.by?.personaId === "string", "validation.override.by is required");
+    }
+    need(!(v.issues ?? []).some((i) => i.severity === "block") || Boolean(v.override),
+      "blocking validation issues require a recorded override");
+  }
   need(typeof d.contentSha256 === "string" && HEX64.test(d.contentSha256), "contentSha256 must be 64 hex chars");
   if (ct && typeof d.contentSha256 === "string" && HEX64.test(d.contentSha256)) {
     need(contentSha256(ct as FdContent) === d.contentSha256, "contentSha256 does not match content");

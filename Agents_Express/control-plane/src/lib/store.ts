@@ -37,6 +37,8 @@ import { upgradePersonas } from "./personas";
 import type { DocumentJob } from "./docintel/model";
 import type { FinalizedDocument } from "./docintel/contract";
 import type { Corpus } from "./ragfactory/model";
+import type { DocumentType } from "./docintel/doctypes";
+import { seedDocumentTypes } from "./docintel/doctypes-seed";
 
 /** A finalized document as stored: the v1 contract plus where it was published. */
 export interface FinalizedDocumentRecord {
@@ -78,6 +80,7 @@ export interface Store {
   documentJobs: DocumentJob[];
   finalizedDocuments: FinalizedDocumentRecord[];
   corpora: Corpus[];
+  documentTypes: DocumentType[];
   audit: AuditEvent[];
 }
 
@@ -1043,6 +1046,7 @@ when {
     documentJobs: [],
     finalizedDocuments: [],
     corpora: [],
+    documentTypes: seedDocumentTypes(iso(0)),
     audit: [
       {
         id: "evt-1",

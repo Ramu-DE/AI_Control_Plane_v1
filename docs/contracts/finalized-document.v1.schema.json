@@ -6,53 +6,137 @@
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "schemaVersion", "finalizedDocumentId", "version", "tenantId", "documentId",
-    "source", "classification", "content", "pii", "provenance", "contentSha256"
+    "schemaVersion",
+    "finalizedDocumentId",
+    "version",
+    "tenantId",
+    "documentId",
+    "source",
+    "classification",
+    "content",
+    "pii",
+    "provenance",
+    "contentSha256"
   ],
   "properties": {
-    "schemaVersion": { "const": "finalized-document/v1" },
-    "finalizedDocumentId": { "type": "string", "pattern": "^fd-[a-z0-9]+$" },
-    "version": { "type": "integer", "minimum": 1 },
-    "supersedes": { "type": ["string", "null"], "description": "finalizedDocumentId of the previous version, if any" },
-    "tenantId": { "type": "string", "minLength": 1 },
-    "documentId": { "type": "string", "pattern": "^doc-[a-z0-9]+$" },
+    "schemaVersion": {
+      "const": "finalized-document/v1"
+    },
+    "finalizedDocumentId": {
+      "type": "string",
+      "pattern": "^fd-[a-z0-9]+$"
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "supersedes": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "finalizedDocumentId of the previous version, if any"
+    },
+    "tenantId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "documentId": {
+      "type": "string",
+      "pattern": "^doc-[a-z0-9]+$"
+    },
     "source": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["fileName", "mimeType", "sizeBytes", "sha256"],
+      "required": [
+        "fileName",
+        "mimeType",
+        "sizeBytes",
+        "sha256"
+      ],
       "properties": {
-        "fileName": { "type": "string", "minLength": 1 },
-        "mimeType": { "type": "string" },
-        "sizeBytes": { "type": "integer", "minimum": 0 },
-        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
-        "pageCount": { "type": "integer", "minimum": 0 }
+        "fileName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "mimeType": {
+          "type": "string"
+        },
+        "sizeBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "pageCount": {
+          "type": "integer",
+          "minimum": 0
+        }
       }
     },
     "classification": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["docType", "gxp", "region"],
+      "required": [
+        "docType",
+        "gxp",
+        "region"
+      ],
       "properties": {
-        "docType": { "type": "string", "minLength": 1 },
-        "gxp": { "type": "boolean", "description": "Copied from the tenant at finalization" },
-        "region": { "type": ["string", "null"], "enum": ["US", "EU", "JP", null] }
+        "docType": {
+          "type": "string",
+          "minLength": 1
+        },
+        "gxp": {
+          "type": "boolean",
+          "description": "Copied from the tenant at finalization"
+        },
+        "region": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "US",
+            "EU",
+            "JP",
+            null
+          ]
+        }
       }
     },
     "content": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["text", "fields", "tables"],
+      "required": [
+        "text",
+        "fields",
+        "tables"
+      ],
       "properties": {
-        "text": { "type": "string", "description": "Full reviewed text (redacted if pii.redaction = 'redacted')" },
+        "text": {
+          "type": "string",
+          "description": "Full reviewed text (redacted if pii.redaction = 'redacted')"
+        },
         "pages": {
           "type": "array",
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["pageNumber", "text"],
+            "required": [
+              "pageNumber",
+              "text"
+            ],
             "properties": {
-              "pageNumber": { "type": "integer", "minimum": 1 },
-              "text": { "type": "string" }
+              "pageNumber": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "text": {
+                "type": "string"
+              }
             }
           }
         },
@@ -61,15 +145,45 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["name", "value", "edited"],
+            "required": [
+              "name",
+              "value",
+              "edited"
+            ],
             "properties": {
-              "name": { "type": "string", "minLength": 1 },
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
               "value": {},
-              "confidence": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
-              "method": { "type": ["string", "null"], "description": "IDP method that produced it" },
-              "capability": { "type": ["string", "null"], "description": "IDP capability, e.g. kv_extraction" },
-              "edited": { "type": "boolean" },
-              "originalValue": { "description": "Present when edited = true" }
+              "confidence": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "minimum": 0,
+                "maximum": 1
+              },
+              "method": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "IDP method that produced it"
+              },
+              "capability": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "IDP capability, e.g. kv_extraction"
+              },
+              "edited": {
+                "type": "boolean"
+              },
+              "originalValue": {
+                "description": "Present when edited = true"
+              }
             }
           }
         },
@@ -78,30 +192,73 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["columns", "rows"],
+            "required": [
+              "columns",
+              "rows"
+            ],
             "properties": {
-              "name": { "type": ["string", "null"] },
-              "columns": { "type": "array", "items": { "type": "string" } },
-              "rows": { "type": "array", "items": { "type": "array" } }
+              "name": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "columns": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "rows": {
+                "type": "array",
+                "items": {
+                  "type": "array"
+                }
+              }
             }
           }
         },
-        "summary": { "type": ["string", "null"] }
+        "summary": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
       }
     },
     "pii": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["redaction", "detected"],
+      "required": [
+        "redaction",
+        "detected"
+      ],
       "properties": {
-        "redaction": { "enum": ["none-detected", "redacted", "retained"] },
+        "redaction": {
+          "enum": [
+            "none-detected",
+            "redacted",
+            "retained"
+          ]
+        },
         "detected": {
           "type": "array",
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["type", "count"],
-            "properties": { "type": { "type": "string" }, "count": { "type": "integer", "minimum": 0 } }
+            "required": [
+              "type",
+              "count"
+            ],
+            "properties": {
+              "type": {
+                "type": "string"
+              },
+              "count": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
           }
         }
       }
@@ -109,43 +266,229 @@
     "provenance": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["methodsRun", "selectedMethod", "capabilities", "submittedBy", "submittedAt", "finalizedBy", "finalizedAt"],
+      "required": [
+        "methodsRun",
+        "selectedMethod",
+        "capabilities",
+        "submittedBy",
+        "submittedAt",
+        "finalizedBy",
+        "finalizedAt"
+      ],
       "properties": {
-        "engine": { "type": "string", "description": "e.g. idp-unified-platform" },
-        "idpDocumentId": { "type": ["string", "null"] },
+        "engine": {
+          "type": "string",
+          "description": "e.g. idp-unified-platform"
+        },
+        "idpDocumentId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "methodsRun": {
           "type": "array",
           "minItems": 1,
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["method", "status"],
+            "required": [
+              "method",
+              "status"
+            ],
             "properties": {
-              "method": { "type": "string" },
-              "status": { "enum": ["complete", "error"] },
-              "latencyMs": { "type": ["number", "null"] },
-              "cost": { "type": ["number", "null"] },
-              "confidence": { "type": ["number", "null"] }
+              "method": {
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "complete",
+                  "error"
+                ]
+              },
+              "latencyMs": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "cost": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "confidence": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
             }
           }
         },
-        "selectedMethod": { "type": "string" },
-        "capabilities": { "type": "array", "items": { "type": "string" } },
-        "submittedBy": { "$ref": "#/$defs/actor" },
-        "submittedAt": { "type": "string", "format": "date-time" },
-        "finalizedBy": { "$ref": "#/$defs/actor" },
-        "finalizedAt": { "type": "string", "format": "date-time" },
-        "reviewNote": { "type": ["string", "null"] }
+        "selectedMethod": {
+          "type": "string"
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "submittedBy": {
+          "$ref": "#/$defs/actor"
+        },
+        "submittedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "finalizedBy": {
+          "$ref": "#/$defs/actor"
+        },
+        "finalizedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "reviewNote": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
       }
     },
-    "contentSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$", "description": "sha256 of the canonical JSON of `content`" }
+    "contentSha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$",
+      "description": "sha256 of the canonical JSON of `content`"
+    },
+    "documentType": {
+      "description": "Document Type the document was checked against (additive, optional).",
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "key",
+        "name",
+        "version"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "key": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "validation": {
+      "description": "Validation outcome at finalization (additive, optional). Blocking issues require an override.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "required": [
+        "clean",
+        "route",
+        "issues"
+      ],
+      "properties": {
+        "clean": {
+          "type": "boolean"
+        },
+        "route": {
+          "enum": [
+            "straight-through",
+            "auto-finalized",
+            "exception",
+            "manual"
+          ]
+        },
+        "issues": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "ruleId",
+              "severity",
+              "message"
+            ],
+            "properties": {
+              "ruleId": {
+                "type": "string"
+              },
+              "severity": {
+                "enum": [
+                  "block",
+                  "warn"
+                ]
+              },
+              "field": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "override": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "required": [
+            "by",
+            "justification",
+            "at"
+          ],
+          "properties": {
+            "by": {
+              "$ref": "#/$defs/actor"
+            },
+            "justification": {
+              "type": "string",
+              "minLength": 10
+            },
+            "at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        }
+      }
+    }
   },
   "$defs": {
     "actor": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["personaId", "name"],
-      "properties": { "personaId": { "type": "string" }, "name": { "type": "string" } }
+      "required": [
+        "personaId",
+        "name"
+      ],
+      "properties": {
+        "personaId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      }
     }
   }
 }

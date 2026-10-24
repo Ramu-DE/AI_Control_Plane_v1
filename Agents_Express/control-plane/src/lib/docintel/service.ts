@@ -28,6 +28,19 @@ import type { DocumentJob, DocumentReview, MethodRun } from "./model";
 import { applyEdits, draftReview } from "./review";
 import { publishToDelta } from "./delta";
 import { onDocumentFinalized } from "../ragfactory/service";
+import { availableTypes, classifyToType, ucMasterDataLookup, usableType } from "./doctypes";
+import type { DocumentType } from "./doctypes";
+import { blockingIssues, mapFieldsToSchema, validateReview } from "./validation";
+import type { MasterDataLookup } from "./validation";
+
+let masterDataLookup: MasterDataLookup = ucMasterDataLookup;
+/** Tests replace the Unity Catalog lookup. */
+export function setMasterDataLookup(l: MasterDataLookup) {
+  masterDataLookup = l;
+}
+
+/** The service principal recorded when a clean, non-GxP document is auto-finalized. */
+export const AUTO_FINALIZER = { id: "svc-docintel-auto", name: "Document Intelligence (auto-finalize)" };
 
 export class DocIntelError extends Error {
   readonly code: string;
@@ -128,12 +141,21 @@ export async function createJob(input: {
   personaId: string;
   fileName: string;
   bytes: Buffer;
+  documentTypeId?: string;
 }): Promise<DocumentJob> {
   const p = persona(input.personaId);
   if (!store.tenants.some((t) => t.id === input.tenantId)) {
     throw new DocIntelError("UNKNOWN_TENANT", `unknown tenant '${input.tenantId}'`);
   }
   authorizeDoc(p.id, input.tenantId, "processDocument", "new-document");
+  let chosen: DocumentType | undefined;
+  if (input.documentTypeId) {
+    try {
+      chosen = usableType(input.documentTypeId, input.tenantId);
+    } catch (e) {
+      throw new DocIntelError("BAD_TYPE", (e as Error).message);
+    }
+  }
   const name = input.fileName.replace(/[\\/]/g, "_").slice(0, 200);
   const ext = name.toLowerCase().split(".").pop() ?? "";
   const mimeType = ALLOWED_TYPES[ext];
@@ -163,6 +185,7 @@ export async function createJob(input: {
     capabilities: [],
     methodRuns: [],
     finalizedDocumentIds: [],
+    ...(chosen ? { documentTypeId: chosen.id, documentTypeVersion: chosen.published!.version, typeSource: "chosen" as const } : {}),
   };
   store.documentJobs.unshift(j);
   logAudit({ category: "agent", action: "docintel-upload", actor: p.name, tenantId: j.tenantId,
@@ -190,8 +213,11 @@ export function startRun(input: {
   if (j.status === "pending-finalization") {
     throw new DocIntelError("LOCKED", "the document is awaiting finalization; send it back first", 409);
   }
-  const methods = (input.methods?.length ? input.methods : DEFAULT_METHODS).filter((m) => SAFE_ID.test(m)).slice(0, 8);
-  const capabilities = (input.capabilities?.length ? input.capabilities : DEFAULT_CAPABILITIES)
+  const typeSpec = j.documentTypeId && j.typeSource === "chosen"
+    ? store.documentTypes.find((t) => t.id === j.documentTypeId)?.published?.spec : undefined;
+  const methods = (input.methods?.length ? input.methods : typeSpec?.methods ?? DEFAULT_METHODS)
+    .filter((m) => SAFE_ID.test(m)).slice(0, 8);
+  const capabilities = (input.capabilities?.length ? input.capabilities : typeSpec?.capabilities ?? DEFAULT_CAPABILITIES)
     .filter((c) => SAFE_ID.test(c)).slice(0, 16);
   if (!methods.length || !capabilities.length) throw new DocIntelError("BAD_REQUEST", "choose at least one method and capability");
   if (!j.idpDocumentId || !j.idpRef) throw new DocIntelError("NO_FILE", "the document has no engine reference", 409);
@@ -215,7 +241,11 @@ export function startRun(input: {
       } else {
         j.status = "extracted";
         // A finalized document being re-reviewed keeps its review until changed.
-        if (!j.review || j.finalizedDocumentIds.length === 0) j.review = draftReview(best, p.id);
+        if (!j.review || j.finalizedDocumentIds.length === 0) {
+          j.review = prepareReview(j, best, p.id);
+          await validateJob(j);
+          await route(j, p.id);
+        }
       }
     } catch (e) {
       j.status = "failed";
@@ -230,15 +260,78 @@ export function startRun(input: {
 }
 
 // --------------------------------------------------------------------------- //
+// Document Types: detect, map, validate, route
+// --------------------------------------------------------------------------- //
+
+function jobType(j: DocumentJob): DocumentType | undefined {
+  return j.documentTypeId ? store.documentTypes.find((t) => t.id === j.documentTypeId && t.published) : undefined;
+}
+
+/** Draft a review from one method, detecting the type if none was chosen, and map fields to its schema. */
+function prepareReview(j: DocumentJob, run: MethodRun, editor: string) {
+  const review = draftReview(run, editor);
+  if (j.typeSource !== "chosen") {
+    const detected = classifyToType(review.docType, availableTypes(j.tenantId));
+    j.documentTypeId = detected?.id;
+    j.documentTypeVersion = detected?.published?.version;
+    j.typeSource = detected ? "detected" : undefined;
+  }
+  const t = jobType(j);
+  if (!t) return review;
+  return { ...review, docType: t.published!.spec.name, fields: mapFieldsToSchema(review.fields, t.published!.spec.fields) };
+}
+
+/** Re-run the type's validation on the current review (no-op without a type). */
+async function validateJob(j: DocumentJob) {
+  const t = jobType(j);
+  if (!t || !j.review) {
+    j.validation = undefined;
+    return;
+  }
+  const spec = t.published!.spec;
+  j.documentTypeVersion = t.published!.version;
+  j.validation = await validateReview(j.review, { fields: spec.fields, rules: spec.rules, minConfidence: spec.routing.minConfidence },
+    masterDataLookup);
+}
+
+/**
+ * After extraction: a clean document of a straight-through type is submitted
+ * at once (the person who ran it is the maker); in a tenant that is NOT GxP,
+ * a type that allows it is finalized by the auto-finalize principal. Anything
+ * else is an exception for a person to review.
+ */
+async function route(j: DocumentJob, runnerId: string) {
+  const t = jobType(j);
+  if (!t) { j.route = "manual"; return; }
+  const routing = t.published!.spec.routing;
+  if (!j.validation?.clean) {
+    j.route = "exception";
+    logAudit({ category: "agent", action: "docintel-exception", actor: "Document Intelligence", tenantId: j.tenantId,
+      detail: `${j.documentId} needs review against '${t.published!.spec.name}' v${t.published!.version}: ` +
+        `${j.validation?.issues.length ?? 0} issue(s), ${blockingIssues(j.validation).length} blocking` });
+    return;
+  }
+  if (!routing.straightThrough) { j.route = "manual"; return; }
+  j.route = "straight-through";
+  j.status = "pending-finalization";
+  j.submittedBy = runnerId;
+  j.submittedAt = new Date().toISOString();
+  logAudit({ category: "agent", action: "docintel-straight-through", actor: persona(runnerId).name, tenantId: j.tenantId,
+    detail: `${j.documentId} is clean against '${t.published!.spec.name}' v${t.published!.version}; submitted straight through` });
+  const gxp = tenantPolicyAttributes(j.tenantId, store.tenants).gxp === "true";
+  if (routing.autoFinalize && !gxp) await autoFinalize(j, t);
+}
+
+// --------------------------------------------------------------------------- //
 // Review, submit, send back
 // --------------------------------------------------------------------------- //
 
-export function saveReview(input: {
+export async function saveReview(input: {
   documentId: string;
   personaId: string;
   selectedMethod?: string;
   edits?: Partial<Pick<DocumentReview, "docType" | "text" | "fields" | "tables" | "summary">>;
-}): DocumentJob {
+}): Promise<DocumentJob> {
   const j = job(input.documentId);
   const p = persona(input.personaId);
   authorizeDoc(p.id, j.tenantId, "reviewDocument", j.documentId);
@@ -249,11 +342,12 @@ export function saveReview(input: {
   if (input.selectedMethod && input.selectedMethod !== base?.selectedMethod) {
     const r = j.methodRuns.find((m) => m.method === input.selectedMethod && m.status === "complete");
     if (!r) throw new DocIntelError("BAD_METHOD", `no completed result for method '${input.selectedMethod}'`);
-    base = draftReview(r, p.id);
+    base = prepareReview(j, r, p.id);
   }
   if (!base) throw new DocIntelError("NO_RESULTS", "run extraction before reviewing", 409);
   j.review = applyEdits(base, input.edits ?? {}, p.id);
   j.status = "in-review";
+  await validateJob(j);
   touch(j);
   logAudit({ category: "agent", action: "docintel-review", actor: p.name, tenantId: j.tenantId,
     detail: `Review of ${j.documentId} saved (method ${j.review.selectedMethod}, ` +
@@ -261,7 +355,12 @@ export function saveReview(input: {
   return j;
 }
 
-export function submitForFinalization(documentId: string, personaId: string): DocumentJob {
+/**
+ * Submit for finalization. Validation is re-run first (master data may have
+ * changed). Blocking issues stop the submission unless the submitter records
+ * a justification, which travels into the finalized record.
+ */
+export async function submitForFinalization(documentId: string, personaId: string, justification?: string): Promise<DocumentJob> {
   const j = job(documentId);
   const p = persona(personaId);
   authorizeDoc(p.id, j.tenantId, "reviewDocument", j.documentId);
@@ -269,13 +368,35 @@ export function submitForFinalization(documentId: string, personaId: string): Do
   if (!["extracted", "in-review"].includes(j.status)) {
     throw new DocIntelError("NOT_SUBMITTABLE", `a ${j.status} document cannot be submitted`, 409);
   }
+  await validateJob(j);
+  const blocking = blockingIssues(j.validation);
+  const why = (justification ?? "").trim();
+  if (blocking.length && why.length < 10) {
+    throw new DocIntelError("VALIDATION_BLOCKED",
+      `${blocking.length} blocking issue(s): ${blocking.map((i) => i.message).join("; ")}. ` +
+      "Fix them, or submit with a justification (10+ characters) that will be recorded.", 422);
+  }
+  j.override = blocking.length ? { by: p.id, justification: why.slice(0, 1000), at: new Date().toISOString() } : undefined;
+  // A person submitted it: an exception stays one (for the STP numbers), anything else is manual.
+  j.route = j.route === "exception" ? "exception" : "manual";
   j.status = "pending-finalization";
   j.submittedBy = p.id;
   j.submittedAt = new Date().toISOString();
   j.sentBackNote = undefined;
   touch(j);
-  logAudit({ category: "agent", action: "docintel-submit", actor: p.name, tenantId: j.tenantId,
-    detail: `${j.documentId} submitted for finalization by ${p.name}` });
+  logAudit({ category: "agent", action: j.override ? "docintel-submit-override" : "docintel-submit", actor: p.name, tenantId: j.tenantId,
+    detail: `${j.documentId} submitted for finalization by ${p.name}` +
+      (j.override ? ` overriding ${blocking.length} blocking issue(s): ${j.override.justification}` : "") });
+  return j;
+}
+
+/** Re-run validation now (e.g. after master data changed). */
+export async function revalidate(documentId: string, personaId: string): Promise<DocumentJob> {
+  const j = job(documentId);
+  const p = persona(personaId);
+  authorizeDoc(p.id, j.tenantId, "reviewDocument", j.documentId);
+  await validateJob(j);
+  touch(j);
   return j;
 }
 
@@ -352,6 +473,24 @@ export function buildFinalizedDocument(
       reviewNote: note,
     },
     contentSha256: contentSha256(content),
+    ...finalizedTypeInfo(j),
+  };
+}
+
+function finalizedTypeInfo(j: DocumentJob): Pick<FinalizedDocument, "documentType" | "validation"> {
+  const t = jobType(j);
+  if (!t || !j.validation) return {};
+  const overrider = j.override ? store.personas.find((p) => p.id === j.override!.by) : undefined;
+  return {
+    documentType: { id: t.id, key: t.key, name: t.published!.spec.name, version: j.documentTypeVersion ?? t.published!.version },
+    validation: {
+      clean: j.validation.clean,
+      route: j.route ?? "manual",
+      issues: j.validation.issues.map((i) => ({ ruleId: i.ruleId, severity: i.severity, ...(i.field ? { field: i.field } : {}), message: i.message })),
+      override: j.override
+        ? { by: { personaId: j.override.by, name: overrider?.name ?? j.override.by }, justification: j.override.justification, at: j.override.at }
+        : null,
+    },
   };
 }
 
@@ -377,20 +516,50 @@ export async function finalize(
   const errors = validateFinalizedDocument(doc);
   if (errors.length) throw new DocIntelError("INVALID_DOCUMENT", `contract violation: ${errors.join("; ")}`, 500);
 
+  logAudit({ category: "agent", action: "docintel-finalize", actor: p.name, tenantId: j.tenantId,
+    detail: `${j.documentId} finalized as ${doc.finalizedDocumentId} v${doc.version} by ${p.name} ` +
+      `(submitted by ${submitter.name}; content sha256 ${doc.contentSha256.slice(0, 12)}…)` });
+  return commitFinalized(j, doc, p.name, publish);
+}
+
+/**
+ * Finalize a clean document with no person: only for an approved type that
+ * allows it, in a tenant that is not GxP-regulated. The type's approval is the
+ * authority, and the record names the type version and its approver.
+ */
+async function autoFinalize(j: DocumentJob, t: DocumentType, publish = publishToDelta) {
+  if (tenantPolicyAttributes(j.tenantId, store.tenants).gxp === "true" || !t.published?.spec.routing.autoFinalize || !j.validation?.clean) return;
+  const approver = store.personas.find((p) => p.id === t.published!.approvedBy)?.name ?? t.published!.approvedBy;
+  const submitter = persona(j.submittedBy!);
+  j.route = "auto-finalized";
+  const doc = buildFinalizedDocument(j, AUTO_FINALIZER, { id: submitter.id, name: submitter.name },
+    `Auto-finalized: clean against '${t.published.spec.name}' v${t.published.version} (approved by ${approver}); tenant is not GxP-regulated.`);
+  const errors = validateFinalizedDocument(doc);
+  if (errors.length) {
+    j.route = "exception";
+    logAudit({ category: "agent", action: "docintel-auto-finalize-failed", actor: AUTO_FINALIZER.name, tenantId: j.tenantId,
+      detail: `${j.documentId}: ${errors.join("; ")}` });
+    return;
+  }
+  logAudit({ category: "agent", action: "docintel-auto-finalize", actor: AUTO_FINALIZER.name, tenantId: j.tenantId,
+    detail: `${j.documentId} auto-finalized as ${doc.finalizedDocumentId} v${doc.version} under '${t.published.spec.name}' v${t.published.version}` });
+  await commitFinalized(j, doc, AUTO_FINALIZER.name, publish);
+}
+
+async function commitFinalized(
+  j: DocumentJob, doc: FinalizedDocument, actor: string, publish = publishToDelta
+): Promise<FinalizedDocumentRecord> {
   const rec: FinalizedDocumentRecord = { doc, delta: { status: "pending" } };
   store.finalizedDocuments.unshift(rec);
   j.finalizedDocumentIds.push(doc.finalizedDocumentId);
   j.status = "finalized";
   touch(j);
-  logAudit({ category: "agent", action: "docintel-finalize", actor: p.name, tenantId: j.tenantId,
-    detail: `${j.documentId} finalized as ${doc.finalizedDocumentId} v${doc.version} by ${p.name} ` +
-      `(submitted by ${submitter.name}; content sha256 ${doc.contentSha256.slice(0, 12)}…)` });
 
   // Corpora holding an older version consume the new one (RAG Factory).
   try {
     onDocumentFinalized(rec);
   } catch (e) {
-    logAudit({ category: "kb", action: "corpus-follow-version-failed", actor: p.name, tenantId: j.tenantId,
+    logAudit({ category: "kb", action: "corpus-follow-version-failed", actor, tenantId: j.tenantId,
       detail: `Could not hand ${doc.finalizedDocumentId} to corpora: ${(e as Error).message}` });
   }
 

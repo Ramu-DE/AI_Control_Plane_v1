@@ -148,6 +148,8 @@ export const ACTION_MIN_ROLE: Record<string, TenantRole> = {
   processDocument: "analyst",
   reviewDocument: "analyst",
   finalizeDocument: "approver",
+  manageDocumentType: "analyst",
+  approveDocumentType: "approver",
   viewCorpus: "viewer",
   queryCorpus: "viewer",
   manageCorpus: "analyst",

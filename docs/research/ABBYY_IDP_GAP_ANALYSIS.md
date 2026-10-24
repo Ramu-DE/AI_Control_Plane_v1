@@ -164,6 +164,8 @@ flowchart LR
   C --> H["P8 Channels + webhooks"]
 ```
 
+**Status (2026-10-24).** **P1, P2, P3 and P7 are built** and verified live: real Bedrock extraction, a real Unity Catalog supplier lookup, and browser tests through CloudFront. See [../modules/document-intelligence/README.md](../modules/document-intelligence/README.md). P4–P6, P8 and P9 are not started.
+
 **Proposed next increment:**
 - **P1 + P2 + P3.** Document Types with field schemas, validation (including CoA-within-spec and invoice line-sum rules), and confidence/validation routing into the Approval Inbox. Seeded with the CoA and supplier-invoice types we have already tested.
 - **P7** as a small dashboard.
