@@ -16,6 +16,7 @@ interface ApprovalItem {
   createdAt: string;
   submittedBy?: string;
   tenantId?: string;
+  eligibleDeciders?: string[];
 }
 
 const KIND_LABEL: Record<ApprovalItem["kind"], string> = {
@@ -170,6 +171,9 @@ export default function ApprovalsPage() {
                     <td className="px-4 py-3">
                       <div className="font-medium">{it.name}</div>
                       <div className="text-xs text-slate-500">{it.detail}</div>
+                      {it.eligibleDeciders && it.submittedBy !== acting.personaId && (
+                        <div className="text-xs text-slate-400">Can decide: {it.eligibleDeciders.join(", ") || "nobody yet"}</div>
+                      )}
                     </td>
                     <td className="px-4 py-3">
                       <span className="badge bg-slate-100 text-slate-600">
@@ -182,7 +186,12 @@ export default function ApprovalsPage() {
                     <td className="px-4 py-3 text-slate-600">
                       {it.owner}
                       {it.submittedBy && it.submittedBy === acting.personaId && (
-                        <div className="text-xs text-amber-700">you submitted this; another approver decides</div>
+                        <div className="text-xs text-amber-700">
+                          You submitted this; another approver decides.
+                          {it.eligibleDeciders?.length
+                            ? ` Switch "Acting as" to: ${it.eligibleDeciders.join(", ")}.`
+                            : " No one else is currently allowed to decide it; add an approver to this tenant in Settings."}
+                        </div>
                       )}
                     </td>
                     <td className="px-4 py-3">

@@ -568,7 +568,7 @@ export default function DocumentsPage() {
                     <h3 className="text-sm font-semibold">Finalization</h3>
                     <p className="text-xs text-slate-500">
                       Submitted by {acting.personas.find((p) => p.id === job.submittedBy)?.name ?? job.submittedBy} at {job.submittedAt}.
-                      {isSubmitter && " You submitted this document, so a different approver must finalize it."}
+                      {isSubmitter && " You submitted this document, so a different approver must finalize it: switch \"Acting as\" to an approver of this tenant (see the Approval Inbox for who can)."}
                     </p>
                     {job.validation && (
                       <p className={`text-sm ${job.validation.clean ? "text-green-700" : "text-amber-800"}`}>

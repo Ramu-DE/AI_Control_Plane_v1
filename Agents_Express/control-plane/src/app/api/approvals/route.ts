@@ -2,6 +2,16 @@ import { NextRequest, NextResponse } from "next/server";
 import { store } from "@/lib/store";
 import { listJobs } from "@/lib/docintel/service";
 import { listCorpora } from "@/lib/ragfactory/service";
+import { evaluate } from "@/lib/evaluator";
+import { DOCINTEL_TOOL, RAG_FACTORY_TOOL } from "@/lib/regulatory";
+
+/** Who could decide this item: passes the same Cedar check, and is not the submitter. */
+function eligibleDeciders(action: string, tool: string, tenantId: string, resource: string, submittedBy?: string): string[] {
+  return store.personas
+    .filter((p) => !p.disabled && p.id !== submittedBy)
+    .filter((p) => evaluate({ personaId: p.id, agentId: "approvals", action, tool, resource, tenantId }).allowed)
+    .map((p) => p.name);
+}
 
 // Approval Inbox — aggregates everything in a pending/review state so an
 // approver has one place to act, instead of hunting through per-record menus.
@@ -25,6 +35,7 @@ export async function GET(req: NextRequest) {
           status: "Pending finalization",
           owner: nameOf(j.submittedBy),
           submittedBy: j.submittedBy,
+          eligibleDeciders: eligibleDeciders("finalizeDocument", DOCINTEL_TOOL, j.tenantId, j.documentId, j.submittedBy),
           tenantId: j.tenantId,
           createdAt: j.submittedAt ?? j.createdAt,
         }))
@@ -63,6 +74,7 @@ export async function GET(req: NextRequest) {
           status: c.status,
           owner: nameOf(c.submittedBy),
           submittedBy: c.submittedBy,
+          eligibleDeciders: eligibleDeciders("approveCorpus", RAG_FACTORY_TOOL, c.tenantId, c.corpusId, c.submittedBy),
           tenantId: c.tenantId,
           createdAt: c.submittedAt ?? c.createdAt,
         }))
