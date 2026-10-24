@@ -31,6 +31,11 @@ import { onDocumentFinalized } from "../ragfactory/service";
 import { availableTypes, classifyToType, ucMasterDataLookup, usableType } from "./doctypes";
 import type { DocumentType } from "./doctypes";
 import { blockingIssues, mapFieldsToSchema, validateReview } from "./validation";
+import type { FieldScore } from "./validation";
+import { candidatesBySchemaField, consensus, features, sameValue, sourceTextOf } from "./accuracy";
+import type { Consensus } from "./accuracy";
+import { activeCalibrator, calibratedP, trainCandidate } from "./calibration";
+import { createHash } from "node:crypto";
 import type { MasterDataLookup } from "./validation";
 
 let masterDataLookup: MasterDataLookup = ucMasterDataLookup;
@@ -239,12 +244,16 @@ export function startRun(input: {
         j.status = "failed";
         j.runError = runs.map((r) => `${r.method}: ${r.error ?? "no output"}`).join("; ").slice(0, 600);
       } else {
-        j.status = "extracted";
+        // The job stays "processing" until validation and routing are done, so
+        // nobody (person or API client) can act on an unvalidated draft.
         // A finalized document being re-reviewed keeps its review until changed.
         if (!j.review || j.finalizedDocumentIds.length === 0) {
-          j.review = prepareReview(j, best, p.id);
+          j.review = prepareReview(j, best, p.id, true);
           await validateJob(j);
+          j.status = "extracted";
           await route(j, p.id);
+        } else {
+          j.status = "extracted";
         }
       }
     } catch (e) {
@@ -268,7 +277,14 @@ function jobType(j: DocumentJob): DocumentType | undefined {
 }
 
 /** Draft a review from one method, detecting the type if none was chosen, and map fields to its schema. */
-function prepareReview(j: DocumentJob, run: MethodRun, editor: string) {
+/**
+ * Draft a review from one method, detecting the type if none was chosen, and
+ * map fields to its schema. On the FIRST draft (useConsensus), each schema
+ * field takes the weighted-consensus value across all completed methods
+ * (ML-3), using the active calibrator's per-method reliability. When a person
+ * explicitly picks a method, that method's values are used as they are.
+ */
+function prepareReview(j: DocumentJob, run: MethodRun, editor: string, useConsensus = false) {
   const review = draftReview(run, editor);
   if (j.typeSource !== "chosen") {
     const detected = classifyToType(review.docType, availableTypes(j.tenantId));
@@ -278,7 +294,58 @@ function prepareReview(j: DocumentJob, run: MethodRun, editor: string) {
   }
   const t = jobType(j);
   if (!t) return review;
-  return { ...review, docType: t.published!.spec.name, fields: mapFieldsToSchema(review.fields, t.published!.spec.fields) };
+  const schema = t.published!.spec.fields;
+  let fields = mapFieldsToSchema(review.fields, schema);
+  if (useConsensus && j.methodRuns.filter((r) => r.status === "complete").length > 1) {
+    const cands = candidatesBySchemaField(j.methodRuns, schema);
+    const rel = activeCalibrator(t.id)?.reliability;
+    for (const spec of schema) {
+      const c = consensus(cands[spec.name], spec.type, rel?.[spec.name]);
+      if (!c) continue;
+      const i = fields.findIndex((f) => f.name === spec.name);
+      if (i < 0) {
+        fields.push({ name: spec.name, value: c.value, confidence: null, method: c.method, capability: "consensus", edited: false });
+      } else if (!sameValue(fields[i].value, c.value, spec.type)) {
+        fields[i] = { ...fields[i], value: c.value, method: c.method, capability: "consensus" };
+      }
+    }
+    fields = mapFieldsToSchema(fields, schema);
+  }
+  return { ...review, docType: t.published!.spec.name, fields };
+}
+
+/** ML-3/ML-4: calibrated P(correct) per schema field for the review as it stands. */
+function scoreFields(j: DocumentJob, t: DocumentType): { scores: Record<string, FieldScore>; calibrated: boolean } {
+  const schema = t.published!.spec.fields;
+  const cands = candidatesBySchemaField(j.methodRuns, schema);
+  const text = sourceTextOf(j.methodRuns);
+  const active = activeCalibrator(t.id);
+  const scores: Record<string, FieldScore> = {};
+  for (const spec of schema) {
+    const f = j.review?.fields.find((x) => x.name === spec.name);
+    if (!f || f.value === null || f.value === undefined || String(f.value).trim() === "") continue;
+    const all = cands[spec.name];
+    const agreeing = all.filter((c) => sameValue(c.value, f.value, spec.type));
+    const best = consensus(all, spec.type, active?.reliability?.[spec.name]);
+    if (f.edited) {
+      scores[spec.name] = { p: 1, source: "reviewer", agreement: all.length ? agreeing.length / all.length : 0, methods: all.length, grounded: true };
+      continue;
+    }
+    // Features of the value AS SHOWN (which may not be the consensus value).
+    const shown: Consensus = {
+      value: f.value, method: agreeing[0]?.method ?? f.method ?? "", agreement: all.length ? agreeing.length / all.length : 0,
+      methods: all.length, margin: best && sameValue(best.value, f.value, spec.type) ? best.margin : 0,
+      candidates: agreeing.length ? agreeing : [{ method: f.method ?? "", value: f.value, selfConfidence: typeof f.confidence === "number" ? f.confidence : null }],
+    };
+    const x = features(shown, spec.type, text);
+    const cp = calibratedP(t.id, x);
+    scores[spec.name] = {
+      p: cp ? Math.round(cp.p * 1000) / 1000 : null, source: cp ? "calibrated" : "uncalibrated",
+      agreement: shown.agreement, methods: all.length, grounded: x[2] === 1,
+      ...(best && !sameValue(best.value, f.value, spec.type) ? { consensusValue: best.value } : {}),
+    };
+  }
+  return { scores, calibrated: Boolean(active) };
 }
 
 /** Re-run the type's validation on the current review (no-op without a type). */
@@ -290,8 +357,42 @@ async function validateJob(j: DocumentJob) {
   }
   const spec = t.published!.spec;
   j.documentTypeVersion = t.published!.version;
-  j.validation = await validateReview(j.review, { fields: spec.fields, rules: spec.rules, minConfidence: spec.routing.minConfidence },
+  const v = await validateReview(j.review, { fields: spec.fields, rules: spec.rules, minConfidence: spec.routing.minConfidence },
     masterDataLookup);
+  const { scores, calibrated } = scoreFields(j, t);
+  const cal = activeCalibrator(t.id);
+  v.fieldScores = scores;
+  if (calibrated && cal) {
+    // Self-reported confidence carries no accuracy information once a
+    // calibrator exists: its warnings are replaced by calibrated ones.
+    v.issues = v.issues.filter((i) => !i.ruleId.startsWith("confidence:"));
+    v.lowConfidence = [];
+    const t0 = cal.threshold.threshold;
+    for (const f of spec.fields) {
+      const sc = scores[f.name];
+      if (!sc || sc.source !== "calibrated" || sc.p === null) continue;
+      if (sc.consensusValue !== undefined) {
+        v.issues.push({ ruleId: `consensus:${f.name}`, severity: "warn", field: f.name,
+          message: `${f.label ?? f.name}: the methods' weighted consensus is "${String(sc.consensusValue)}"` });
+      }
+      if (!sc.grounded) {
+        v.issues.push({ ruleId: `grounding:${f.name}`, severity: "warn", field: f.name,
+          message: `${f.label ?? f.name} "${String(j.review!.fields.find((x) => x.name === f.name)?.value)}" was not found in the document text` });
+      }
+      if (t0 !== null && sc.p < t0) {
+        v.lowConfidence.push(f.name);
+        v.issues.push({ ruleId: `calibrated:${f.name}`, severity: "warn", field: f.name,
+          message: `${f.label ?? f.name}: calibrated confidence ${sc.p.toFixed(2)} is below the auto-accept threshold ${t0.toFixed(2)}; please confirm` });
+      }
+    }
+    v.clean = v.issues.length === 0 && v.requiredPresent === v.requiredTotal;
+  }
+  v.autoAccept = !cal
+    ? { available: false, threshold: null, reason: "no active calibrator for this document type yet: every document is reviewed by a person" }
+    : cal.threshold.threshold === null
+      ? { available: false, threshold: null, calibratorVersion: cal.version, reason: cal.threshold.reason }
+      : { available: true, threshold: cal.threshold.threshold, calibratorVersion: cal.version, reason: cal.threshold.reason };
+  j.validation = v;
 }
 
 /**
@@ -312,6 +413,19 @@ async function route(j: DocumentJob, runnerId: string) {
     return;
   }
   if (!routing.straightThrough) { j.route = "manual"; return; }
+  // Straight-through needs PROVEN precision (an active calibrator with a threshold).
+  if (!j.validation.autoAccept?.available) { j.route = "manual"; return; }
+  const critical = t.published!.spec.fields.filter((f) => f.critical && j.review?.fields.some((x) => x.name === f.name && !x.edited));
+  if (critical.length) { j.route = "manual"; return; }
+  // Random audit slice (deterministic per document): keeps the precision estimate honest.
+  const rate = routing.auditRate ?? 0.05;
+  if (createHash("sha256").update(j.documentId).digest()[0] / 256 < rate) {
+    j.route = "manual";
+    j.auditSample = true;
+    logAudit({ category: "agent", action: "docintel-audit-sample", actor: "Document Intelligence", tenantId: j.tenantId,
+      detail: `${j.documentId} would have gone straight through; selected for the random audit sample (${Math.round(rate * 100)}%)` });
+    return;
+  }
   j.route = "straight-through";
   j.status = "pending-finalization";
   j.submittedBy = runnerId;
@@ -554,6 +668,16 @@ async function commitFinalized(
   j.finalizedDocumentIds.push(doc.finalizedDocumentId);
   j.status = "finalized";
   touch(j);
+
+  // Every finalized document is new ground truth: refresh the type's candidate
+  // calibrator. It only affects routing once an approver activates it.
+  if (doc.documentType?.id) {
+    try {
+      trainCandidate(doc.documentType.id);
+    } catch (e) {
+      logAudit({ category: "agent", action: "calibrator-train-failed", actor, tenantId: j.tenantId, detail: (e as Error).message });
+    }
+  }
 
   // Corpora holding an older version consume the new one (RAG Factory).
   try {

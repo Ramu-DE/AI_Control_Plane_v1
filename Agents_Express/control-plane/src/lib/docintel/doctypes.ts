@@ -26,6 +26,10 @@ export interface DocTypeRouting {
    * that are not GxP-regulated; a GxP tenant always has a human finalizer.
    */
   autoFinalize: boolean;
+  /** Precision the calibrated auto-accept threshold must prove (default 0.995). */
+  precisionTarget?: number;
+  /** Share of would-be straight-through documents sent to a person anyway, for unbiased monitoring (default 0.05). */
+  auditRate?: number;
 }
 
 export interface DocTypeSpec {
@@ -120,6 +124,8 @@ export function checkSpec(spec: DocTypeSpec): string[] {
   }
   const rt = spec.routing;
   if (!rt || typeof rt.minConfidence !== "number" || rt.minConfidence < 0 || rt.minConfidence > 1) errs.push("routing.minConfidence must be within 0..1");
+  if (rt?.precisionTarget !== undefined && !(rt.precisionTarget >= 0.9 && rt.precisionTarget < 1)) errs.push("routing.precisionTarget must be within 0.9..0.9999");
+  if (rt?.auditRate !== undefined && !(rt.auditRate >= 0 && rt.auditRate <= 1)) errs.push("routing.auditRate must be within 0..1");
   if (!spec.methods?.length) errs.push("at least one method is required");
   if (!spec.capabilities?.length) errs.push("at least one capability is required");
   return errs;
@@ -204,6 +210,19 @@ export function updateType(id: string, personaId: string, spec: DocTypeSpec): Do
   logAudit({ category: "agent", action: "doctype-update", actor: p.name, tenantId: t.tenantId,
     detail: `Document type '${spec.name}' draft edited (published v${t.published?.version ?? 0} still in use)` });
   return t;
+}
+
+/** Add learned synonyms to a type's DRAFT (they apply once the draft is approved). */
+export function addSynonyms(id: string, personaId: string, add: { field: string; name: string }[]): DocumentType {
+  const t = find(id);
+  const spec: DocTypeSpec = JSON.parse(JSON.stringify(t.draft));
+  for (const a of add) {
+    const f = spec.fields.find((x) => x.name === a.field);
+    if (!f) throw new DocTypeError("BAD_FIELD", `'${a.field}' is not a field of ${spec.name}`);
+    const name = a.name.trim().slice(0, 60);
+    if (name && !(f.synonyms ?? []).some((y) => y.toLowerCase() === name.toLowerCase())) f.synonyms = [...(f.synonyms ?? []), name];
+  }
+  return updateType(id, personaId, spec);
 }
 
 export function submitType(id: string, personaId: string): DocumentType {

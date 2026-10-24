@@ -28,6 +28,8 @@ export interface FieldSpec {
   allowed?: string[];
   /** Other names the extraction may use for this field. */
   synonyms?: string[];
+  /** Always needs a person (dose, lot, specification limit, release decision): never auto-accepted. */
+  critical?: boolean;
 }
 
 export type Severity = "block" | "warn";
@@ -59,6 +61,21 @@ export interface ValidationResult {
   lowConfidence: string[];
   /** Rules whose check could not run (e.g. master data unreachable). */
   skipped: string[];
+  /** Calibrated P(correct) per field, when the type has an active calibrator (ML-4). */
+  fieldScores?: Record<string, FieldScore>;
+  /** Whether auto-accept is available for this document, and why not. */
+  autoAccept?: { available: boolean; threshold: number | null; calibratorVersion?: number; reason: string };
+}
+
+export interface FieldScore {
+  /** Calibrated probability the value is correct; 1 when a person entered or confirmed it. */
+  p: number | null;
+  source: "calibrated" | "reviewer" | "uncalibrated";
+  agreement: number;
+  methods: number;
+  grounded: boolean;
+  /** The consensus value differed from what the review shows (a person may have chosen another). */
+  consensusValue?: unknown;
 }
 
 /** Lookup for master_data rules: does `value` exist (with the status) in the table? */
@@ -267,7 +284,9 @@ function ruleChecks(review: Pick<DocumentReview, "fields" | "tables">, rules: Va
         const total = parseNumber(val(r.total));
         const t = findTable(review.tables, r.column);
         if (total === null || !t) { skipped.push(r.id); break; }
-        const nums = t.table.rows.map((row) => parseNumber(row[t.cols[0]])).filter((n): n is number => n !== null);
+        // Rows that are themselves totals ("Total Due", "Subtotal") are not line items.
+        const isTotalRow = (row: unknown[]) => row.some((c) => typeof c === "string" && /\b(sub)?total\b|\bbalance\b|\bamount due\b|\bgrand\b/i.test(c));
+        const nums = t.table.rows.filter((row) => !isTotalRow(row)).map((row) => parseNumber(row[t.cols[0]])).filter((n): n is number => n !== null);
         if (!nums.length) { skipped.push(r.id); break; }
         const sum = Math.round(nums.reduce((s, n) => s + n, 0) * 100) / 100;
         if (Math.abs(sum - total) > (r.tolerance ?? 0.01)) {

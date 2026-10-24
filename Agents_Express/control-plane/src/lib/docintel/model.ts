@@ -81,6 +81,8 @@ export interface DocumentJob {
   validation?: ValidationResult;
   /** How the document travelled: straight-through, auto-finalized, exception, or manual (no type). */
   route?: FdRoute;
+  /** Picked by the random audit slice: would have gone straight through, sent to a person to keep accuracy estimates unbiased. */
+  auditSample?: boolean;
   /** Submitted despite blocking issues: who and why. */
   override?: { by: string; justification: string; at: string };
   /** Finalized versions, oldest first. */

@@ -7,7 +7,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { PageHeader, Field, EmptyState } from "@/components/ui";
-import { getJSON } from "@/lib/api";
+import { getJSON, sendJSON } from "@/lib/api";
 import { ActingAsSelect, useActingPersona } from "@/components/ActingAs";
 
 interface TypeStats {
@@ -26,6 +26,67 @@ interface Analytics {
   byMethod: MethodStats[];
   topCorrectedFields: { documentType: string; field: string; corrections: number; finalized: number; example?: { from: unknown; to: unknown } }[];
   topIssues: { documentType: string; ruleId: string; count: number; example: string }[];
+}
+
+interface Calibrator {
+  id: string; version: number; status: string; trainedAt: string; documents: number; labels: number; positives: number;
+  target: number; ece: number; requiredSample: number; consensusAccuracy: number | null;
+  bestSingleMethodAccuracy: { method: string; accuracy: number } | null;
+  suggestedSynonyms?: { field: string; name: string; count: number }[];
+  threshold: { threshold: number | null; accepted: number; precision: number | null; lowerBound: number | null; coverage: number; reason: string };
+  methodStats: { method: string; field: string; correct: number; total: number; accuracy: number }[];
+  reliabilityBins: { lo: number; hi: number; n: number; meanP: number; accuracy: number }[];
+  activatedBy?: string; activatedAt?: string;
+}
+interface AccuracyType { id: string; name: string; tenantId: string; version: number; target: number; active: Calibrator | null; candidate: Calibrator | null }
+
+function CalibratorCard({ c, title, onSynonyms }: { c: Calibrator; title: string; onSynonyms?: (s: { field: string; name: string }[]) => void }) {
+  const fields = [...new Set(c.methodStats.map((m) => m.field))];
+  const methods = [...new Set(c.methodStats.map((m) => m.method))];
+  return (
+    <div className="rounded border p-3 text-xs">
+      <div className="mb-2 font-medium">{title} v{c.version} · trained {c.trainedAt.slice(0, 16).replace("T", " ")} · {c.documents} document(s), {c.labels} labelled field(s)</div>
+      <div className="mb-2 grid gap-2 sm:grid-cols-4">
+        <div>Consensus accuracy <b className="tabular-nums">{pct(c.consensusAccuracy)}</b></div>
+        <div>Best single method <b className="tabular-nums">{c.bestSingleMethodAccuracy ? `${pct(c.bestSingleMethodAccuracy.accuracy)} (${c.bestSingleMethodAccuracy.method})` : "—"}</b></div>
+        <div>Calibration error (ECE) <b className="tabular-nums">{c.labels ? c.ece.toFixed(3) : "—"}</b></div>
+        <div>Auto-accept {c.threshold.threshold === null
+          ? <b className="text-amber-800">off</b>
+          : <b className="text-green-700">P ≥ {c.threshold.threshold.toFixed(3)} · {pct(c.threshold.coverage)} of fields</b>}</div>
+      </div>
+      <p className="mb-2 text-slate-600">
+        {c.threshold.threshold === null ? `Why off: ${c.threshold.reason}.` : `Proven: ${c.threshold.reason} (lower bound ${((c.threshold.lowerBound ?? 0) * 100).toFixed(2)}%).`}
+        {" "}Target {(c.target * 100).toFixed(1)}% needs ≥ {c.requiredSample} verified error-free fields.
+      </p>
+      {(c.suggestedSynonyms ?? []).length > 0 && (
+        <div className="mb-2 rounded bg-amber-50 p-2 text-amber-900">
+          Learned from finalized documents: these extracted labels carried the approved value but are not synonyms yet, so the field was missed:{" "}
+          {c.suggestedSynonyms!.map((s) => `"${s.name}" → ${s.field} (${s.count}×)`).join(", ")}.
+          {onSynonyms && (
+            <button className="btn-ghost ml-2 text-xs" onClick={() => onSynonyms(c.suggestedSynonyms!.map(({ field, name }) => ({ field, name })))}>
+              Add to the type's draft (needs approval)
+            </button>
+          )}
+        </div>
+      )}
+      {fields.length > 0 && (
+        <table className="w-full">
+          <thead className="text-left text-slate-500"><tr><th className="py-1">Field (measured accuracy)</th>{methods.map((m) => <th key={m} className="font-mono">{m}</th>)}</tr></thead>
+          <tbody>
+            {fields.map((f) => (
+              <tr key={f} className="border-t">
+                <td className="py-1 font-mono">{f}</td>
+                {methods.map((m) => {
+                  const st = c.methodStats.find((x) => x.field === f && x.method === m);
+                  return <td key={m} className="tabular-nums">{st ? `${pct(st.accuracy)} (${st.correct}/${st.total})` : "—"}</td>;
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
 }
 
 const pct = (v: number | null) => (v === null ? "—" : `${Math.round(v * 100)}%`);
@@ -69,6 +130,20 @@ export default function QualityPage() {
   const [tenantId, setTenantId] = useState("");
   const [data, setData] = useState<Analytics | null>(null);
   const [error, setError] = useState("");
+  const [acc, setAcc] = useState<AccuracyType[]>([]);
+  const [busy, setBusy] = useState("");
+  async function loadAccuracy() {
+    if (!personaId) { setAcc([]); return; }
+    const r = await getJSON<{ types: AccuracyType[] }>(`/api/docintel?personaId=${encodeURIComponent(personaId)}&accuracy=1`);
+    setAcc(r.types);
+  }
+  useEffect(() => { loadAccuracy().catch(() => undefined); }, [personaId]);
+  async function calAct(label: string, body: Record<string, unknown>) {
+    setBusy(label); setError("");
+    try { await sendJSON("/api/docintel", "POST", { personaId, ...body }); await loadAccuracy(); }
+    catch (e) { setError((e as Error).message); }
+    finally { setBusy(""); }
+  }
 
   useEffect(() => {
     if (!personaId) { setData(null); return; }
@@ -161,6 +236,37 @@ export default function QualityPage() {
                   ))}
                 </tbody>
               </table>
+            </section>
+
+            <section className="card mb-4 space-y-3 overflow-x-auto p-5">
+              <div>
+                <h3 className="text-sm font-semibold">Accuracy and calibration</h3>
+                <p className="text-xs text-slate-500">
+                  Measured against four-eyes-finalized values. Every method's output is compared with what was approved; the methods are
+                  combined by weighted vote; a calibrator turns agreement, grounding and format into P(correct). Auto-accept is enabled only at a
+                  threshold whose precision is proven with 95% confidence, and only once an approver activates the calibrator.
+                </p>
+              </div>
+              {acc.map((t) => (
+                <div key={t.id} className="space-y-2 rounded-lg bg-slate-50 p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                    <span className="font-medium">{t.name} <span className="text-xs text-slate-500">v{t.version} · {t.tenantId} · target {(t.target * 100).toFixed(1)}%</span></span>
+                    <div className="flex gap-2">
+                      <button className="btn-ghost text-xs" disabled={busy !== ""} onClick={() => calAct(`train-${t.id}`, { op: "calibrationTrain", typeId: t.id })}>
+                        {busy === `train-${t.id}` ? "Training…" : "Retrain candidate"}
+                      </button>
+                      {t.candidate && (
+                        <button className="btn-primary text-xs" disabled={busy !== ""} onClick={() => calAct(`act-${t.id}`, { op: "calibrationActivate", calibratorId: t.candidate!.id })}>
+                          Activate candidate v{t.candidate.version}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  {t.active ? <CalibratorCard c={t.active} title="Active" /> : <p className="text-xs text-amber-800">No active calibrator: every document of this type is reviewed by a person.</p>}
+                  {t.candidate && <CalibratorCard c={t.candidate} title="Candidate"
+                    onSynonyms={(syn) => calAct(`syn-${t.id}`, { op: "typeAddSynonyms", typeId: t.id, synonyms: syn })} />}
+                </div>
+              ))}
             </section>
 
             <div className="grid gap-4 lg:grid-cols-2">

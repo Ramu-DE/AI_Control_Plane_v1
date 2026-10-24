@@ -38,6 +38,7 @@ import type { DocumentJob } from "./docintel/model";
 import type { FinalizedDocument } from "./docintel/contract";
 import type { Corpus } from "./ragfactory/model";
 import type { DocumentType } from "./docintel/doctypes";
+import type { Calibrator } from "./docintel/calibration";
 import { seedDocumentTypes } from "./docintel/doctypes-seed";
 
 /** A finalized document as stored: the v1 contract plus where it was published. */
@@ -81,6 +82,7 @@ export interface Store {
   finalizedDocuments: FinalizedDocumentRecord[];
   corpora: Corpus[];
   documentTypes: DocumentType[];
+  calibrators: Calibrator[];
   audit: AuditEvent[];
 }
 
@@ -1047,6 +1049,7 @@ when {
     finalizedDocuments: [],
     corpora: [],
     documentTypes: seedDocumentTypes(iso(0)),
+    calibrators: [],
     audit: [
       {
         id: "evt-1",

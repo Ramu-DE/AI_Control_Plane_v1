@@ -11,7 +11,7 @@ import { getJSON, sendJSON } from "@/lib/api";
 import { ActingAsSelect, useActingPersona } from "@/components/ActingAs";
 
 type FieldType = "text" | "number" | "money" | "percent" | "date" | "enum";
-interface FieldSpec { name: string; label?: string; type: FieldType; required: boolean; pattern?: string; allowed?: string[]; synonyms?: string[] }
+interface FieldSpec { name: string; label?: string; type: FieldType; required: boolean; pattern?: string; allowed?: string[]; synonyms?: string[]; critical?: boolean }
 type Severity = "block" | "warn";
 type Rule =
   | { id: string; kind: "date_order"; earlier: string; later: string; severity: Severity }
@@ -22,7 +22,7 @@ type Rule =
 interface Spec {
   name: string; description: string; classifierHints: string[]; fields: FieldSpec[]; rules: Rule[];
   methods: string[]; capabilities: string[];
-  routing: { minConfidence: number; straightThrough: boolean; autoFinalize: boolean }; ragPattern?: string;
+  routing: { minConfidence: number; straightThrough: boolean; autoFinalize: boolean; precisionTarget?: number; auditRate?: number }; ragPattern?: string;
 }
 interface DocType {
   id: string; key: string; tenantId: string; createdBy: string; createdAt: string; updatedAt: string; draft: Spec;
@@ -218,7 +218,7 @@ export default function DocumentTypesPage() {
                   <h3 className="text-sm font-semibold">Fields</h3>
                   <table className="w-full min-w-[56rem] text-xs">
                     <thead className="text-left text-slate-500">
-                      <tr><th className="py-1">Name (snake_case)</th><th>Label</th><th>Type</th><th>Required</th><th>Format (regex)</th><th>Synonyms / allowed values</th><th /></tr>
+                      <tr><th className="py-1">Name (snake_case)</th><th>Label</th><th>Type</th><th>Required</th><th title="Always reviewed by a person; never auto-accepted">Critical</th><th>Format (regex)</th><th>Synonyms / allowed values</th><th /></tr>
                     </thead>
                     <tbody>
                       {spec.fields.map((f, i) => (
@@ -231,6 +231,7 @@ export default function DocumentTypesPage() {
                             </select>
                           </td>
                           <td className="pr-1 text-center"><input type="checkbox" checked={f.required} disabled={!editable} onChange={(e) => setField(i, { required: e.target.checked })} /></td>
+                          <td className="pr-1 text-center"><input type="checkbox" checked={Boolean(f.critical)} disabled={!editable} onChange={(e) => setField(i, { critical: e.target.checked || undefined })} /></td>
                           <td className="pr-1"><input className="input py-1 font-mono" value={f.pattern ?? ""} disabled={!editable} onChange={(e) => setField(i, { pattern: e.target.value || undefined })} /></td>
                           <td className="pr-1">
                             <input className="input py-1" value={f.type === "enum" ? csv(f.allowed) : csv(f.synonyms)} disabled={!editable}
@@ -319,6 +320,16 @@ export default function DocumentTypesPage() {
                       <input className="input w-28" type="number" min={0} max={1} step={0.05} value={spec.routing.minConfidence} disabled={!editable}
                         onChange={(e) => setSpec({ ...spec, routing: { ...spec.routing, minConfidence: +e.target.value } })} />
                     </Field>
+                    <div className="grid grid-cols-2 gap-3">
+                      <Field label="Precision target" hint="Auto-accept needs this proven with 95% confidence">
+                        <input className="input" type="number" min={0.9} max={0.9999} step={0.001} value={spec.routing.precisionTarget ?? 0.995} disabled={!editable}
+                          onChange={(e) => setSpec({ ...spec, routing: { ...spec.routing, precisionTarget: +e.target.value } })} />
+                      </Field>
+                      <Field label="Audit sample rate" hint="Share of would-be straight-through documents a person still reviews">
+                        <input className="input" type="number" min={0} max={1} step={0.01} value={spec.routing.auditRate ?? 0.05} disabled={!editable}
+                          onChange={(e) => setSpec({ ...spec, routing: { ...spec.routing, auditRate: +e.target.value } })} />
+                      </Field>
+                    </div>
                     <label className="flex items-center gap-2 text-sm">
                       <input type="checkbox" checked={spec.routing.straightThrough} disabled={!editable}
                         onChange={(e) => setSpec({ ...spec, routing: { ...spec.routing, straightThrough: e.target.checked } })} />

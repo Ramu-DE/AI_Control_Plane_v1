@@ -68,10 +68,13 @@ interface Job {
   validation?: Validation;
   route?: "straight-through" | "auto-finalized" | "exception" | "manual";
   override?: { by: string; justification: string; at: string };
+  auditSample?: boolean;
 }
 interface Issue { ruleId: string; severity: "block" | "warn"; field?: string; message: string }
 interface Validation {
   at: string; issues: Issue[]; clean: boolean; requiredPresent: number; requiredTotal: number; lowConfidence: string[]; skipped: string[];
+  fieldScores?: Record<string, { p: number | null; source: string; agreement: number; methods: number; grounded: boolean; consensusValue?: unknown }>;
+  autoAccept?: { available: boolean; threshold: number | null; calibratorVersion?: number; reason: string };
 }
 interface TypeInfo {
   id: string; key: string; name: string; version: number; tenantId: string;
@@ -462,6 +465,14 @@ export default function DocumentsPage() {
                         ))}
                       </ul>
                     )}
+                    {job.validation.autoAccept && (
+                      <p className={`text-xs ${job.validation.autoAccept.available ? "text-green-700" : "text-slate-500"}`}>
+                        Auto-accept: {job.validation.autoAccept.available
+                          ? `on, calibrated P ≥ ${job.validation.autoAccept.threshold?.toFixed(3)} (calibrator v${job.validation.autoAccept.calibratorVersion}; ${job.validation.autoAccept.reason})`
+                          : `off. ${job.validation.autoAccept.reason}`}
+                        {job.auditSample ? " · this document was picked for the random audit sample" : ""}
+                      </p>
+                    )}
                     {job.validation.skipped.length > 0 && (
                       <p className="text-xs text-slate-500">Not evaluated (data missing or source unavailable): {job.validation.skipped.join(", ")}</p>
                     )}
@@ -505,8 +516,14 @@ export default function DocumentsPage() {
                                     fields[i] = { ...f, value: e.target.value };
                                     setDraft({ ...draft, fields });
                                   }} />
-                                <span className="text-xs text-slate-500">
-                                  {typeof f.confidence === "number" ? f.confidence.toFixed(2)
+                                <span className="text-xs text-slate-500" title={job.validation?.fieldScores?.[f.name]
+                                  ? `${job.validation.fieldScores[f.name].source === "calibrated" ? "calibrated P(correct)" : job.validation.fieldScores[f.name].source}; ` +
+                                    `${Math.round(job.validation.fieldScores[f.name].agreement * job.validation.fieldScores[f.name].methods)}/${job.validation.fieldScores[f.name].methods} methods agree; ` +
+                                    `${job.validation.fieldScores[f.name].grounded ? "found in the text" : "NOT found in the text"}` : "self-reported confidence"}>
+                                  {job.validation?.fieldScores?.[f.name]?.source === "reviewer" ? "✓ you"
+                                    : typeof job.validation?.fieldScores?.[f.name]?.p === "number" ? `P ${job.validation!.fieldScores![f.name].p!.toFixed(2)}`
+                                    : job.validation?.fieldScores?.[f.name] ? `${Math.round(job.validation.fieldScores[f.name].agreement * job.validation.fieldScores[f.name].methods)}/${job.validation.fieldScores[f.name].methods} agree`
+                                    : typeof f.confidence === "number" ? f.confidence.toFixed(2)
                                     : specField?.required && !job.review?.fields.some((o) => o.name === f.name) ? <span className="text-red-700">missing</span> : ""}
                                 </span>
                               </div>

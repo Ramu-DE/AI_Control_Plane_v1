@@ -20,13 +20,27 @@ import { computeAnalytics } from "../src/lib/docintel/analytics.ts";
 import type { DocumentJob, MethodRun } from "../src/lib/docintel/model.ts";
 import { store } from "../src/lib/store.ts";
 
+// Straight-through needs an ACTIVE calibrator with a proven threshold. These
+// routing tests install a permissive one (threshold 0) so they exercise the
+// rules and routing logic; the calibration itself is tested in accuracy.test.ts.
+import { FEATURES } from "../src/lib/docintel/accuracy.ts";
+for (const typeId of ["dt-seed-coa", "dt-seed-invoice"]) {
+  store.calibrators.push({
+    id: `cal-test-${typeId}`, typeId, typeVersion: 1, version: 1, status: "active", trainedAt: "2026-10-24T00:00:00Z",
+    documents: 600, labels: 600, positives: 600, target: 0.995, model: { weights: FEATURES.map(() => 0) }, features: FEATURES,
+    threshold: { threshold: 0, accepted: 600, correctAccepted: 600, precision: 1, lowerBound: 0.995, coverage: 1, reason: "test" },
+    ece: 0, reliabilityBins: [], reliability: {}, methodStats: [], consensusAccuracy: 1, bestSingleMethodAccuracy: null, requiredSample: 598, suggestedSynonyms: [],
+  });
+  store.documentTypes.find((t) => t.id === typeId)!.published!.spec.routing.auditRate = 0;
+}
+
 const approvedSuppliers = new Set(["acme lab supplies"]);
 setMasterDataLookup(async (q) => approvedSuppliers.has(q.value.toLowerCase()));
 
 const coaRun = (over: { result?: string; expiry?: string; conf?: number } = {}): MethodRun => ({
   method: "claude-sonnet", status: "complete", latencyMs: 9000, cost: 0.05, confidence: 0.96,
   results: {
-    text_extraction: { data: "CERTIFICATE OF ANALYSIS ...", confidence: 0.96, format: "text" },
+    text_extraction: { data: `CERTIFICATE OF ANALYSIS\nProduct: Vonoprazan 20 mg\nBatch Number: VF-24-0917\nManufacturing Date: 2026-09-12\nExpiry Date: ${over.expiry ?? "2028-09-11"}\nManufacturer: Osaka Plant\nConclusion: Released`, confidence: 0.96, format: "text" },
     kv_extraction: { data: {
       "Product": "Vonoprazan 20 mg", "Batch Number": "VF-24-0917", "Manufacturing Date": "2026-09-12",
       "Expiry Date": over.expiry ?? "2028-09-11", "Manufacturer": "Osaka Plant", "Conclusion": "Released",
@@ -39,7 +53,7 @@ const coaRun = (over: { result?: string; expiry?: string; conf?: number } = {}):
 const invoiceRun = (supplier = "ACME Lab Supplies", total = "745.00 USD"): MethodRun => ({
   method: "claude-haiku", status: "complete", latencyMs: 4000, cost: 0.005, confidence: 0.95,
   results: {
-    text_extraction: { data: "INVOICE ...", confidence: 0.95, format: "text" },
+    text_extraction: { data: `${supplier} INVOICE\nInvoice Number: INV-1\nInvoice Date: 2026-10-20\nTotal Due: ${total}`, confidence: 0.95, format: "text" },
     kv_extraction: { data: { company_name: supplier, invoice_number: "INV-1", invoice_date: "2026-10-20", total_due: total },
       confidence: 0.93, format: "json" },
     table_extraction: { data: "| Item | Amount |\n|---|---|\n| Tips | 125.00 |\n| Kit | 620.00 |", confidence: 0.9, format: "markdown" },

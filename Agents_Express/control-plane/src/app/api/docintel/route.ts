@@ -19,10 +19,13 @@ import { IdpError, idpConfig, idpHealth } from "@/lib/docintel/idpClient";
 import { deltaTarget } from "@/lib/docintel/delta";
 import { computeAnalytics } from "@/lib/docintel/analytics";
 import {
-  DocTypeError, availableTypes, createType, decideType, deprecateType, listTypes, submitType, updateType,
+  DocTypeError, addSynonyms, availableTypes, createType, decideType, deprecateType, listTypes, submitType, updateType,
 } from "@/lib/docintel/doctypes";
 import type { DocTypeSpec } from "@/lib/docintel/doctypes";
 import { store } from "@/lib/store";
+import { CalibrationError, activateCalibrator, trainCandidate } from "@/lib/docintel/calibration";
+import { evaluate } from "@/lib/evaluator";
+import { DOCINTEL_TOOL } from "@/lib/regulatory";
 import {
   ALLOWED_TYPES,
   DEFAULT_CAPABILITIES,
@@ -45,6 +48,7 @@ export const runtime = "nodejs";
 export const maxDuration = 120;
 
 function errorResponse(e: unknown): NextResponse {
+  if (e instanceof CalibrationError) return NextResponse.json({ error: e.message }, { status: e.status });
   if (e instanceof DocIntelError || e instanceof DocTypeError) {
     return NextResponse.json({ error: e.message, code: e.code }, { status: e.status });
   }
@@ -74,6 +78,19 @@ export async function GET(req: NextRequest) {
         types: listTypes(personaId),
         available: tenantId ? availableTypes(tenantId).map((t) => ({ id: t.id, key: t.key, name: t.published!.spec.name,
           version: t.published!.version, tenantId: t.tenantId, spec: t.published!.spec })) : [],
+      });
+    }
+    if (q.get("accuracy")) {
+      // ML-1..4 status per Document Type the persona can see: measured method
+      // accuracy, consensus accuracy, calibration and the auto-accept threshold.
+      const types = listTypes(personaId).filter((t) => t.published);
+      return NextResponse.json({
+        types: types.map((t) => ({
+          id: t.id, name: t.draft.name, tenantId: t.tenantId, version: t.published!.version,
+          target: t.published!.spec.routing.precisionTarget ?? 0.995,
+          active: store.calibrators.find((c) => c.typeId === t.id && c.status === "active") ?? null,
+          candidate: store.calibrators.find((c) => c.typeId === t.id && c.status === "candidate") ?? null,
+        })),
       });
     }
     if (q.get("analytics")) {
@@ -131,6 +148,19 @@ export async function POST(req: NextRequest) {
       case "submit":
         return NextResponse.json({ job: publicJob(await submitForFinalization(documentId, personaId,
           typeof body.justification === "string" ? body.justification : undefined)) });
+      case "calibrationTrain": {
+        const typeId = String(body.typeId ?? "");
+        const t = store.documentTypes.find((x) => x.id === typeId);
+        if (!t) throw new DocTypeError("NOT_FOUND", `document type '${typeId}' not found`, 404);
+        const d = evaluate({ personaId, agentId: "docintel", action: "manageDocumentType", tool: DOCINTEL_TOOL, resource: typeId, tenantId: t.tenantId });
+        if (!d.allowed) throw new DocTypeError("NOT_PERMITTED", d.decisions[d.decisions.length - 1]?.reason ?? "denied", 403);
+        return NextResponse.json({ calibrator: trainCandidate(typeId) });
+      }
+      case "typeAddSynonyms":
+        return NextResponse.json({ type: addSynonyms(String(body.typeId ?? ""), personaId,
+          (Array.isArray(body.synonyms) ? body.synonyms : []) as { field: string; name: string }[]) });
+      case "calibrationActivate":
+        return NextResponse.json({ calibrator: activateCalibrator(String(body.calibratorId ?? ""), personaId) });
       case "typeCreate":
         return NextResponse.json({ type: createType({ tenantId: String(body.tenantId ?? ""), personaId,
           key: String(body.key ?? ""), spec: body.spec as DocTypeSpec }) }, { status: 201 });
