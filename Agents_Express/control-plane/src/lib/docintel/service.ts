@@ -27,6 +27,7 @@ import { idpProcess, idpUpload } from "./idpClient";
 import type { DocumentJob, DocumentReview, MethodRun } from "./model";
 import { applyEdits, draftReview } from "./review";
 import { publishToDelta } from "./delta";
+import { onDocumentFinalized } from "../ragfactory/service";
 
 export class DocIntelError extends Error {
   readonly code: string;
@@ -379,6 +380,14 @@ export async function finalize(
   logAudit({ category: "agent", action: "docintel-finalize", actor: p.name, tenantId: j.tenantId,
     detail: `${j.documentId} finalized as ${doc.finalizedDocumentId} v${doc.version} by ${p.name} ` +
       `(submitted by ${submitter.name}; content sha256 ${doc.contentSha256.slice(0, 12)}…)` });
+
+  // Corpora holding an older version consume the new one (RAG Factory).
+  try {
+    onDocumentFinalized(rec);
+  } catch (e) {
+    logAudit({ category: "kb", action: "corpus-follow-version-failed", actor: p.name, tenantId: j.tenantId,
+      detail: `Could not hand ${doc.finalizedDocumentId} to corpora: ${(e as Error).message}` });
+  }
 
   // Publish to Delta; the record says what happened either way.
   try {

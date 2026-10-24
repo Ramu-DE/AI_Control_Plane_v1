@@ -36,6 +36,7 @@ import { recoverInterruptedRuns } from "./workflow/recover";
 import { upgradePersonas } from "./personas";
 import type { DocumentJob } from "./docintel/model";
 import type { FinalizedDocument } from "./docintel/contract";
+import type { Corpus } from "./ragfactory/model";
 
 /** A finalized document as stored: the v1 contract plus where it was published. */
 export interface FinalizedDocumentRecord {
@@ -76,6 +77,7 @@ export interface Store {
   /** Document Intelligence: jobs and their immutable finalized versions. */
   documentJobs: DocumentJob[];
   finalizedDocuments: FinalizedDocumentRecord[];
+  corpora: Corpus[];
   audit: AuditEvent[];
 }
 
@@ -1040,6 +1042,7 @@ when {
     workflowRuns: [],
     documentJobs: [],
     finalizedDocuments: [],
+    corpora: [],
     audit: [
       {
         id: "evt-1",

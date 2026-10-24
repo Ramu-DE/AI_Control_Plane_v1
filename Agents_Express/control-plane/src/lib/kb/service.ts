@@ -50,12 +50,17 @@ export function recordScopedPolicyExists(policies: Policy[], recordId: string): 
  * personas without touching the perimeter rule.
  */
 export function authorizeRetrieval(recordId: string, personaId: string): KbAuthorization {
+  // A tenant-owned KB is evaluated IN its tenant: membership, the role
+  // minimum and the GxP / residency forbids then apply. Platform-provided
+  // records (no tenantId) keep the perimeter-only decision.
+  const tenantId = store.records.find((r) => r.id === recordId)?.tenantId;
   const perimeterResult = evaluate({
     personaId,
     agentId: "kb-retriever",
     action: KB_ACTION,
     tool: KB_PERIMETER_TOOL,
     resource: recordId,
+    ...(tenantId ? { tenantId } : {}),
   });
   const pd = perimeterResult.decisions[0];
   const perimeter = {
@@ -92,6 +97,7 @@ export function authorizeRetrieval(recordId: string, personaId: string): KbAutho
     action: KB_ACTION,
     tool: recordScopedTool(recordId),
     resource: recordId,
+    ...(tenantId ? { tenantId } : {}),
   });
   const sd = scoped.decisions[0];
   return {

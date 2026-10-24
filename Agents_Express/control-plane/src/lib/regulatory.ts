@@ -30,6 +30,10 @@ export const REGULATED_ACTIONS = [
   "processDocument",
   "reviewDocument",
   "finalizeDocument",
+  "viewCorpus",
+  "manageCorpus",
+  "approveCorpus",
+  "queryCorpus",
 ];
 
 const actionList = REGULATED_ACTIONS.map((a) => `Action::"${a}"`).join(", ");
@@ -42,6 +46,9 @@ export const APPROVE_RECORD_ACTION = "approveRecord";
 /** Document Intelligence (IDP) actions, all on the perimeter tool below. */
 export const DOCINTEL_TOOL = "docintel";
 export const DOCINTEL_ACTIONS = ["viewDocument", "processDocument", "reviewDocument", "finalizeDocument"] as const;
+/** RAG Factory actions (corpora built from finalized documents), on the perimeter tool below. */
+export const RAG_FACTORY_TOOL = "ragfactory";
+export const RAG_FACTORY_ACTIONS = ["viewCorpus", "manageCorpus", "approveCorpus", "queryCorpus"] as const;
 
 export function regulatoryPolicies(createdAt: string): Policy[] {
   return [
@@ -85,6 +92,20 @@ export function regulatoryPolicies(createdAt: string): Policy[] {
   principal,
   action in [${DOCINTEL_ACTIONS.map((a) => `Action::"${a}"`).join(", ")}],
   resource == Tool::"${DOCINTEL_TOOL}"
+);`,
+    },
+    {
+      id: "pol-gw-ragfactory",
+      name: "Gateway: tenant members may use the RAG Factory",
+      layer: "gateway",
+      description:
+        "Perimeter for RAG corpora built from finalized documents. The platform already enforces the role minimums (view and query: viewer, create / edit / submit / build: analyst, approve: approver, never the submitter); the GxP and residency forbids apply on top.",
+      enabled: true,
+      createdAt,
+      cedar: `permit(
+  principal,
+  action in [${RAG_FACTORY_ACTIONS.map((a) => `Action::"${a}"`).join(", ")}],
+  resource == Tool::"${RAG_FACTORY_TOOL}"
 );`,
     },
     {

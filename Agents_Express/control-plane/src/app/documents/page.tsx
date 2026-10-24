@@ -5,6 +5,7 @@
 // person. Finalized documents are immutable FinalizedDocument v1 records that
 // the RAG Factory and Delta consume.
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { PageHeader, Field, EmptyState } from "@/components/ui";
 import { getJSON, sendJSON, withBase } from "@/lib/api";
@@ -443,7 +444,12 @@ export default function DocumentsPage() {
 
                 {job.finalizedDocumentIds.length > 0 && (
                   <section className="card space-y-3 p-5">
-                    <h3 className="text-sm font-semibold">Finalized versions</h3>
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-sm font-semibold">Finalized versions</h3>
+                      <Link className="btn-ghost text-xs" href={`/rag?tenant=${encodeURIComponent(job.tenantId)}`}>
+                        Build a RAG corpus →
+                      </Link>
+                    </div>
                     <div className="flex flex-wrap gap-2">
                       {job.finalizedDocumentIds.map((id, i) => (
                         <button key={id} className="btn-ghost text-xs" onClick={() => openFinalized(id)}>

@@ -283,7 +283,7 @@ Rules the contract enforces:
 |---|---|---|
 | **0. Contract + hardening** | `FinalizedDocument v1`. **IDP:** service-mode auth, only server-issued storage refs (no arbitrary bucket, no traversal), tenant recorded on runs/chunks, file reads scoped, agent server protected. **Factory:** per-document incremental index (overwrite fix), service-mode auth, tenant enforced, no silent in-memory store, committed key removed from files. | **done**: local branch `hardening/service-mode` in each repo, not pushed. IDP: 207/208 unit tests (the one failure is pre-existing on `main`). Factory: 25/25, plus `POST /ingest/finalized` |
 | **1. Document Intelligence module** | Upload → run methods (IDP sidecar) → compare → review/edit → submit → finalize (four eyes, GxP) → `FinalizedDocument v1` in the control plane + Delta | **done**: `/documents`, `/api/docintel`, `lib/docintel/*`; 12 unit tests; verified live on 2026-10-24 (see below) |
-| 2. RAG Factory module | Corpus → profile → proposed pattern → approve → build job → tenant collection → KB record → agents | planned |
+| **2. RAG Factory module** | Corpus → profile → proposed pattern → approve → build job → tenant collection → KB record → agents | **done**: `/rag`, `/api/ragfactory`, `lib/ragfactory/*`; factory branch `phase2/corpus-patterns`; 7 control-plane + 8 factory tests; verified live on 2026-10-24 (see below) |
 | 3. KG from documents | Finalized fields in Delta → graph-utility ontology-first build | planned |
 | 4. Production | Entra ID sign-in, a queue for large batches, Mosaic AI Vector Search, IDP's IaC repaired | planned |
 
@@ -299,7 +299,19 @@ The control plane ran against the IDP sidecar in service mode (`127.0.0.1:3001`)
 6. With valid service headers, the sidecar refused these refs: `../` traversal (400), an absolute path (403), another tenant's upload (403), a foreign bucket (403), and another tenant's `/api/files` (404).
 7. Control-plane `npm test` passed 465/465 and the smoke test passed 100/100.
 
-Runtime: `~/.config/agentcontrol/start-idp.sh` starts the sidecar from `idp.env` (mode 600, holds `SERVICE_TOKEN`). The control plane reads `IDP_URL` and `IDP_SERVICE_TOKEN` from `~/.config/agentcontrol/env`. Both files live outside the repo.
+### Phase 2 live verification (2026-10-24)
+
+The control plane drove the RAG Factory sidecar in service mode (`127.0.0.1:8000`), with Qdrant Cloud and Bedrock (Titan v2 embeddings, Claude Sonnet 4.6 answers).
+
+1. A second document (a Certificate of Analysis: 12 fields, a 5-row results table) was finalized through Phase 1.
+2. Priya selected both finalized documents. The profile (9 fields on average, tables in 2 of 2 documents, 391 characters of text) recommended **Structured fields + tables**. Sofia (not a member) could not create a corpus.
+3. Priya submitted the corpus. Self-approval was refused. Daniel approved it, and the build ran `structured_chunking` into `cp_fn-rnd_corp-12n58srt` (3 + 4 chunks). It registered the Approved Knowledge Base `RAG_R_D_supplier_and_QA_documents_12n58srt`, with Priya as submitter and Daniel as decider.
+4. "Assay result for batch VF-24-0917, released?" returned 99.4 % within 95.0–105.0 %, released, faithfulness 1. The top hits were the fields, text and table chunks of the certificate. The invoice question (filter `doc_type=invoice`) found a real inconsistency: the reviewed field said Net 45 but the text still said Net 30. Lena (another tenant) was refused.
+5. Priya corrected the text and submitted v2. Daniel finalized it. The corpus (following new versions) re-ingested v2 at once, without re-approval: 3 chunks in, 3 v1 points removed. The same question then answered **Net 45** and cited only v2.
+6. The Knowledge Base works through the platform's own `/api/kb/retrieve`, the path agents use. That check exposed a gap that predates this work: KB retrieval was evaluated without the record's tenant, so any persona could read a tenant's KB. It is now evaluated in the record's tenant, so Lena and Kenji are denied. Platform-provided KBs are unchanged.
+7. `npm test` passed 472/472, the smoke test passed 100/100, and the factory suite passed 33/33.
+
+Runtime: `~/.config/agentcontrol/start-idp.sh` and `start-raf.sh` start the sidecars from `idp.env` and `raf.env` (mode 600; they hold each `SERVICE_TOKEN`, and `raf.env` also holds the Qdrant credentials). `start.sh` launches both if they are not already listening. The control plane reads `IDP_URL`, `IDP_SERVICE_TOKEN`, `RAG_URL` and `RAG_SERVICE_TOKEN` from `~/.config/agentcontrol/env`. Both files live outside the repo.
 
 ## 10. Things only the owner can do
 

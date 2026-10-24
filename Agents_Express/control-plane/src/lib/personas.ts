@@ -148,6 +148,10 @@ export const ACTION_MIN_ROLE: Record<string, TenantRole> = {
   processDocument: "analyst",
   reviewDocument: "analyst",
   finalizeDocument: "approver",
+  viewCorpus: "viewer",
+  queryCorpus: "viewer",
+  manageCorpus: "analyst",
+  approveCorpus: "approver",
 };
 
 /** Does the role in force meet the action's minimum? */
