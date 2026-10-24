@@ -5,8 +5,8 @@ There are three processes. Only the control plane is opened in the browser.
 | Process | Repo / branch | Port |
 |---|---|---|
 | Control plane (UI + API) | `Ramu-DE/AI_Control_Plane_v1` `main` → `Agents_Express/control-plane` | 3000 |
-| IDP engine (extraction) | `Ramu-DE/IDP_latest` `phase3/schema-guided` | 3001 |
-| RAG Factory (corpora, answers) | `Ramu-DE/rag-ai-factory` `phase3/decision-safe` | 8000 |
+| IDP engine (extraction) | `Ramu-DE/IDP_latest` `main` | 3001 |
+| RAG Factory (corpora, answers) | `Ramu-DE/rag-ai-factory` `main` | 8000 |
 
 ## 1. Prerequisites
 
@@ -25,8 +25,8 @@ There are three processes. Only the control plane is opened in the browser.
 ```bash
 mkdir ai-control && cd ai-control
 git clone https://github.com/Ramu-DE/AI_Control_Plane_v1.git
-git clone -b phase3/schema-guided https://github.com/Ramu-DE/IDP_latest.git
-git clone -b phase3/decision-safe  https://github.com/Ramu-DE/rag-ai-factory.git
+git clone https://github.com/Ramu-DE/IDP_latest.git
+git clone https://github.com/Ramu-DE/rag-ai-factory.git
 ```
 
 ## 3. Shared service tokens
