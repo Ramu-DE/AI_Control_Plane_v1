@@ -110,3 +110,44 @@ export function ragQuery(
     ...(input.filters && Object.keys(input.filters).length ? { filters: input.filters } : {}),
   }, caller, timeoutMs);
 }
+
+export interface DecisionCitation {
+  n: number;
+  doc_id: string;
+  finalized_document_id: string;
+  version: number;
+  doc_type?: string;
+  page_num?: number | null;
+  chunk_kind?: string;
+  score?: number | null;
+  lexical?: boolean;
+  text: string;
+}
+
+export interface DecisionResult {
+  question: string;
+  abstained: boolean;
+  reason?: string;
+  answer: string | null;
+  draft?: string;
+  claims: { text: string; citations: number[]; supported: boolean; problems: string[]; verifier?: string }[];
+  citations: DecisionCitation[];
+  retrieval: { tokens: string[]; lexical_hits: number; top_dense_score: number | null };
+  attempts?: number;
+  elapsed_ms: number;
+}
+
+/** Decision-grade answer: current versions only, hybrid retrieval, claim-verified, abstains. */
+export function ragDecisionQuery(
+  input: { collection: string; query: string; topK: number; allowedFinalizedIds: string[];
+    filters?: Record<string, string | number | boolean>; minScore?: number },
+  caller: RagCaller,
+  timeoutMs = 3 * 60_000
+): Promise<DecisionResult> {
+  return call<DecisionResult>("/query/decision", {
+    query: input.query, collection_name: input.collection, top_k: input.topK,
+    allowed_finalized_ids: input.allowedFinalizedIds,
+    ...(input.filters && Object.keys(input.filters).length ? { filters: input.filters } : {}),
+    ...(input.minScore !== undefined ? { min_score: input.minScore } : {}),
+  }, caller, timeoutMs);
+}

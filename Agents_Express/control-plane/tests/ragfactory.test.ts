@@ -181,23 +181,56 @@ test("a new finalized version flows into following corpora, and is listed for th
   assert.deepEqual(pinned.updatesAvailable.map((u) => u.version), [2]);
 });
 
-test("asking a built corpus passes the pattern's top-k and the corpus tenant", async () => {
+test("narrative questions go to the verified path with the corpus's current versions and tenant", async () => {
   const a = put(fd());
   const c = createCorpus({ tenantId: "fn-rnd", personaId: "persona-priya", name: "Ask", finalizedDocumentIds: [a.finalizedDocumentId] });
   submitCorpus(c.corpusId, "persona-priya");
   decideCorpus(c.corpusId, "persona-daniel", "approve", null, okIngest);
   await settle();
   let seen: Record<string, unknown> = {};
-  const out = await queryCorpus({ corpusId: c.corpusId, personaId: "persona-priya", question: " total? ", filters: { chunk_kind: "fields" } },
-    async (input, caller) => {
+  const out = await queryCorpus({ corpusId: c.corpusId, personaId: "persona-priya", question: " why was it released? ", filters: { chunk_kind: "text" } }, {
+    route: async () => ({ route: "narrative", reason: "explanation", model: "stub" }),
+    decision: async (input, caller) => {
       seen = { ...input, ...caller };
-      return { answer: "100 USD", retrieved_chunks: [{ text: "f0: 0", doc_id: a.documentId, chunk_kind: "fields", version: 1 }],
-        scores: [0.8], guard_log: {}, faithfulness: 0.9, elapsed_ms: 5 };
-    });
-  assert.deepEqual(seen, { collection: c.collection, query: "total?", topK: 6, filters: { chunk_kind: "fields" }, tenantId: "fn-rnd", personaId: "persona-priya" });
-  assert.equal(out.answer, "100 USD");
-  assert.equal(out.passages[0].chunkKind, "fields");
-  await assert.rejects(queryCorpus({ corpusId: c.corpusId, personaId: "persona-lena", question: "q" }), (e: RagCorpusError) => e.status === 403);
+      return { question: input.query, abstained: false, answer: "Released after QA review [1].",
+        claims: [{ text: "Released after QA review [1].", citations: [1], supported: true, problems: [] }],
+        citations: [{ n: 1, doc_id: a.documentId, finalized_document_id: a.finalizedDocumentId, version: 1, chunk_kind: "text", text: "released" }],
+        retrieval: { tokens: [], lexical_hits: 0, top_dense_score: 0.5 }, elapsed_ms: 5 };
+    },
+  });
+  assert.deepEqual(seen, { collection: c.collection, query: "why was it released?", topK: 6, allowedFinalizedIds: [a.finalizedDocumentId],
+    filters: { chunk_kind: "text" }, tenantId: "fn-rnd", personaId: "persona-priya" });
+  assert.equal(out.mode, "verified-retrieval");
+  assert.equal(out.citations[0].finalizedDocumentId, a.finalizedDocumentId);
+  await assert.rejects(queryCorpus({ corpusId: c.corpusId, personaId: "persona-lena", question: "q?" }), (e: RagCorpusError) => e.status === 403);
+});
+
+test("structured questions are executed exactly over finalized fields; bad plans fall back", async () => {
+  const a = put(fd());
+  const c = createCorpus({ tenantId: "fn-rnd", personaId: "persona-priya", name: "Exact", finalizedDocumentIds: [a.finalizedDocumentId] });
+  submitCorpus(c.corpusId, "persona-priya");
+  decideCorpus(c.corpusId, "persona-daniel", "approve", null, okIngest);
+  await settle();
+  let decisionCalls = 0;
+  const decision = async () => { decisionCalls += 1; return { question: "", abstained: true, reason: "x", answer: null, claims: [], citations: [],
+    retrieval: { tokens: [], lexical_hits: 0, top_dense_score: null }, elapsed_ms: 1 }; };
+  const exact = await queryCorpus({ corpusId: c.corpusId, personaId: "persona-priya", question: "what is f3?" }, {
+    route: async () => ({ route: "structured", reason: "value", model: "stub",
+      plan: { documentFilters: [{ field: "f0", op: "eq", value: "0" }], select: { type: "fields", fields: ["f3"] } } }),
+    decision,
+  });
+  assert.equal(exact.mode, "exact");
+  assert.match(exact.answer ?? "", /f3 = 3/);
+  assert.equal(exact.citations[0].ref, "field f3");
+  assert.equal(decisionCalls, 0, "no retrieval for an exact answer");
+  const fallback = await queryCorpus({ corpusId: c.corpusId, personaId: "persona-priya", question: "what is the colour?" }, {
+    route: async () => ({ route: "structured", reason: "value", model: "stub",
+      plan: { documentFilters: [], select: { type: "fields", fields: ["colour"] } } }),
+    decision,
+  });
+  assert.equal(fallback.mode, "verified-retrieval");
+  assert.deepEqual(fallback.route.planErrors, ["unknown field 'colour'"]);
+  assert.equal(decisionCalls, 1);
 });
 
 test("a corpus Knowledge Base is retrievable only inside its tenant, under GxP rules", async () => {

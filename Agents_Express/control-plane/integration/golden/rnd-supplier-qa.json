@@ -1,0 +1,282 @@
+{
+  "corpusId": "corp-12n58srt",
+  "personaId": "persona-priya",
+  "description": "R&D supplier and QA documents: ACME invoice INV-2026-0042 (v2, Net 45) and CoA batch VF-24-0917. Expected answers are taken from the four-eyes-finalized records.",
+  "questions": [
+    {
+      "id": "L1",
+      "category": "lookup",
+      "q": "What is the assay result for batch VF-24-0917?",
+      "expect": {
+        "contains": [
+          "99.4"
+        ]
+      }
+    },
+    {
+      "id": "L2",
+      "category": "lookup",
+      "q": "What is the expiry date of batch VF-24-0917?",
+      "expect": {
+        "contains": [
+          "2028-09-11"
+        ]
+      }
+    },
+    {
+      "id": "L3",
+      "category": "lookup",
+      "q": "What is the invoice number of the ACME Lab Supplies invoice?",
+      "expect": {
+        "contains": [
+          "INV-2026-0042"
+        ]
+      }
+    },
+    {
+      "id": "L4",
+      "category": "lookup",
+      "q": "What are the payment terms on invoice INV-2026-0042?",
+      "expect": {
+        "contains": [
+          "Net 45"
+        ],
+        "notContains": [
+          "Net 30"
+        ]
+      }
+    },
+    {
+      "id": "L5",
+      "category": "lookup",
+      "q": "What is the total due on invoice INV-2026-0042?",
+      "expect": {
+        "contains": [
+          "745"
+        ]
+      }
+    },
+    {
+      "id": "L6",
+      "category": "lookup",
+      "q": "Who manufactured batch VF-24-0917?",
+      "expect": {
+        "contains": [
+          "Osaka"
+        ]
+      }
+    },
+    {
+      "id": "L7",
+      "category": "lookup",
+      "q": "What was the dissolution result for batch VF-24-0917?",
+      "expect": {
+        "contains": [
+          "92"
+        ]
+      }
+    },
+    {
+      "id": "L8",
+      "category": "lookup",
+      "q": "What is the specification for water content on the certificate of analysis?",
+      "expect": {
+        "contains": [
+          "3.0"
+        ]
+      }
+    },
+    {
+      "id": "L9",
+      "category": "lookup",
+      "q": "What was the related substances result?",
+      "expect": {
+        "contains": [
+          "0.12"
+        ]
+      }
+    },
+    {
+      "id": "N1",
+      "category": "negation",
+      "q": "Which tests did not meet the specification for batch VF-24-0917?",
+      "expect": {
+        "matches": "(within specification|no (test|result)s?|none|all .*(met|comply|complies|within))",
+        "notMatches": "(Assay|Dissolution|Water|Related substances)[^.]*(failed|did not meet|out of spec)"
+      }
+    },
+    {
+      "id": "N2",
+      "category": "negation",
+      "q": "Were any results outside their specification?",
+      "expect": {
+        "matches": "(no\\b|none|within specification|all .*(met|within|compl))"
+      }
+    },
+    {
+      "id": "A1",
+      "category": "aggregate",
+      "q": "How many documents are in this corpus?",
+      "expect": {
+        "contains": [
+          "2"
+        ]
+      }
+    },
+    {
+      "id": "A2",
+      "category": "aggregate",
+      "q": "How many supplier invoices are there?",
+      "expect": {
+        "matches": "\\b1\\b|\\bone\\b"
+      }
+    },
+    {
+      "id": "R1",
+      "category": "narrative",
+      "q": "Why was batch VF-24-0917 released?",
+      "expect": {
+        "matches": "compl(y|ies) with all specifications"
+      }
+    },
+    {
+      "id": "R2",
+      "category": "narrative",
+      "q": "Who approved the certificate of analysis for batch VF-24-0917?",
+      "expect": {
+        "contains": [
+          "Sato"
+        ]
+      }
+    },
+    {
+      "id": "R3",
+      "category": "narrative",
+      "q": "Which items were billed on the ACME invoice?",
+      "expect": {
+        "contains": [
+          "Pipette tips",
+          "Reagent kit"
+        ]
+      }
+    },
+    {
+      "id": "U1",
+      "category": "unanswerable",
+      "q": "Who is the CEO of Takeda?",
+      "expect": {
+        "abstain": true
+      }
+    },
+    {
+      "id": "U2",
+      "category": "unanswerable",
+      "q": "What is the assay result for batch VF-24-9999?",
+      "expect": {
+        "abstain": true,
+        "notContains": [
+          "99.4"
+        ]
+      }
+    },
+    {
+      "id": "U3",
+      "category": "unanswerable",
+      "q": "What is the price of the reagent kit in euros?",
+      "expect": {
+        "abstain": true
+      }
+    },
+    {
+      "id": "U4",
+      "category": "unanswerable",
+      "q": "What is the shelf life of the pipette tips?",
+      "expect": {
+        "abstain": true
+      }
+    },
+    {
+      "id": "P1",
+      "category": "paraphrase",
+      "q": "assay for lot VF-24-0917?",
+      "expect": {
+        "contains": [
+          "99.4"
+        ]
+      }
+    },
+    {
+      "id": "P2",
+      "category": "paraphrase",
+      "q": "what's the amount due on the acme bill",
+      "expect": {
+        "contains": [
+          "745"
+        ]
+      }
+    },
+    {
+      "id": "P3",
+      "category": "comparison",
+      "q": "Is the water content result for batch VF-24-0917 below its limit?",
+      "expect": {
+        "contains": [
+          "1.4"
+        ]
+      }
+    },
+    {
+      "id": "P4",
+      "category": "filter",
+      "q": "Which items on the ACME invoice have an amount above 200?",
+      "expect": {
+        "contains": [
+          "Reagent kit"
+        ],
+        "notContains": [
+          "Pipette"
+        ]
+      }
+    },
+    {
+      "id": "P5",
+      "category": "lookup",
+      "q": "When was the ACME invoice issued?",
+      "expect": {
+        "contains": [
+          "2026-10-20"
+        ]
+      }
+    },
+    {
+      "id": "S1",
+      "category": "scoping",
+      "q": "What was the assay result for batch VF-24-0933?",
+      "expect": {
+        "abstain": true,
+        "notContains": [
+          "94.1"
+        ]
+      }
+    },
+    {
+      "id": "S2",
+      "category": "scoping",
+      "q": "What are the payment terms on invoice INV-7781?",
+      "expect": {
+        "abstain": true,
+        "notContains": [
+          "Net 30"
+        ]
+      }
+    },
+    {
+      "id": "S3",
+      "category": "scoping",
+      "q": "Is Initech Labware an approved supplier?",
+      "expect": {
+        "abstain": true
+      }
+    }
+  ]
+}

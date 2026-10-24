@@ -1,0 +1,513 @@
+{
+  "summary": {
+    "set": "integration/golden/rnd-supplier-qa.json",
+    "at": "2026-10-24T12:51:48.086Z",
+    "questions": 28,
+    "answerable": 21,
+    "answered": 21,
+    "abstainedOnAnswerable": 0,
+    "correctOnAnswerable": 21,
+    "wrongOnAnswerable": 0,
+    "unanswerable": 7,
+    "correctlyAbstained": 7,
+    "answeredUnanswerable": 0,
+    "coverage": 1,
+    "precisionOfAnswers": 1,
+    "precisionLowerBound95": 0.8670540889734766,
+    "byMode": {
+      "exact": {
+        "questions": 23,
+        "correct": 23
+      },
+      "verified-retrieval": {
+        "questions": 5,
+        "correct": 5
+      }
+    }
+  },
+  "results": [
+    {
+      "id": "L1",
+      "category": "lookup",
+      "q": "What is the assay result for batch VF-24-0917?",
+      "expect": {
+        "contains": [
+          "99.4"
+        ]
+      },
+      "mode": "exact",
+      "verdict": "correct",
+      "problems": [],
+      "answer": "Certificate of Analysis coa.pdf (fd-4a0cg2eo v1): Assay HPLC = 99.4 %",
+      "citations": 1,
+      "claims": [],
+      "seconds": 3.541
+    },
+    {
+      "id": "L2",
+      "category": "lookup",
+      "q": "What is the expiry date of batch VF-24-0917?",
+      "expect": {
+        "contains": [
+          "2028-09-11"
+        ]
+      },
+      "mode": "exact",
+      "verdict": "correct",
+      "problems": [],
+      "answer": "Certificate of Analysis coa.pdf (fd-4a0cg2eo v1): Expiry Date = 2028-09-11",
+      "citations": 1,
+      "claims": [],
+      "seconds": 3.499
+    },
+    {
+      "id": "L3",
+      "category": "lookup",
+      "q": "What is the invoice number of the ACME Lab Supplies invoice?",
+      "expect": {
+        "contains": [
+          "INV-2026-0042"
+        ]
+      },
+      "mode": "exact",
+      "verdict": "correct",
+      "problems": [],
+      "answer": "invoice invoice.pdf (fd-h4iju0ke v2): invoice_number = INV-2026-0042",
+      "citations": 1,
+      "claims": [],
+      "seconds": 3.761
+    },
+    {
+      "id": "L4",
+      "category": "lookup",
+      "q": "What are the payment terms on invoice INV-2026-0042?",
+      "expect": {
+        "contains": [
+          "Net 45"
+        ],
+        "notContains": [
+          "Net 30"
+        ]
+      },
+      "mode": "exact",
+      "verdict": "correct",
+      "problems": [],
+      "answer": "invoice invoice.pdf (fd-h4iju0ke v2): payment_terms = Net 45",
+      "citations": 1,
+      "claims": [],
+      "seconds": 4.988
+    },
+    {
+      "id": "L5",
+      "category": "lookup",
+      "q": "What is the total due on invoice INV-2026-0042?",
+      "expect": {
+        "contains": [
+          "745"
+        ]
+      },
+      "mode": "exact",
+      "verdict": "correct",
+      "problems": [],
+      "answer": "invoice invoice.pdf (fd-h4iju0ke v2): total_due = 745.00 USD",
+      "citations": 1,
+      "claims": [],
+      "seconds": 3.434
+    },
+    {
+      "id": "L6",
+      "category": "lookup",
+      "q": "Who manufactured batch VF-24-0917?",
+      "expect": {
+        "contains": [
+          "Osaka"
+        ]
+      },
+      "mode": "exact",
+      "verdict": "correct",
+      "problems": [],
+      "answer": "Certificate of Analysis coa.pdf (fd-4a0cg2eo v1): Manufacturer = Takeda Pharmaceutical, Osaka Plant",
+      "citations": 1,
+      "claims": [],
+      "seconds": 4.254
+    },
+    {
+      "id": "L7",
+      "category": "lookup",
+      "q": "What was the dissolution result for batch VF-24-0917?",
+      "expect": {
+        "contains": [
+          "92"
+        ]
+      },
+      "mode": "exact",
+      "verdict": "correct",
+      "problems": [],
+      "answer": "Certificate of Analysis coa.pdf (fd-4a0cg2eo v1), table 1 row 2: Test = Dissolution [30 min], Specification = NLT 80 %, Result = 92 %",
+      "citations": 1,
+      "claims": [],
+      "seconds": 4.361
+    },
+    {
+      "id": "L8",
+      "category": "lookup",
+      "q": "What is the specification for water content on the certificate of analysis?",
+      "expect": {
+        "contains": [
+          "3.0"
+        ]
+      },
+      "mode": "exact",
+      "verdict": "correct",
+      "problems": [],
+      "answer": "Certificate of Analysis coa.pdf (fd-4a0cg2eo v1), table 1 row 4: Test = Water content [KF], Specification = NMT 3.0 %",
+      "citations": 1,
+      "claims": [],
+      "seconds": 3.866
+    },
+    {
+      "id": "L9",
+      "category": "lookup",
+      "q": "What was the related substances result?",
+      "expect": {
+        "contains": [
+          "0.12"
+        ]
+      },
+      "mode": "exact",
+      "verdict": "correct",
+      "problems": [],
+      "answer": "Certificate of Analysis coa.pdf (fd-4a0cg2eo v1): Related substances = 0.12 %",
+      "citations": 1,
+      "claims": [],
+      "seconds": 3.052
+    },
+    {
+      "id": "N1",
+      "category": "negation",
+      "q": "Which tests did not meet the specification for batch VF-24-0917?",
+      "expect": {
+        "matches": "(within specification|no (test|result)s?|none|all .*(met|comply|complies|within))",
+        "notMatches": "(Assay|Dissolution|Water|Related substances)[^.]*(failed|did not meet|out of spec)"
+      },
+      "mode": "exact",
+      "verdict": "correct",
+      "problems": [],
+      "answer": "No result outside its specification in 1 finalized document(s) matching docType eq \"Certificate of Analysis\" and Batch Number eq \"VF-24-0917\": all 5 evaluated test(s) are within specification.",
+      "reason": "no finalized value matches",
+      "citations": 1,
+      "claims": [],
+      "seconds": 5.805
+    },
+    {
+      "id": "N2",
+      "category": "negation",
+      "q": "Were any results outside their specification?",
+      "expect": {
+        "matches": "(no\\b|none|within specification|all .*(met|within|compl))"
+      },
+      "mode": "exact",
+      "verdict": "correct",
+      "problems": [],
+      "answer": "No result outside its specification in 2 finalized document(s): all 5 evaluated test(s) are within specification.",
+      "reason": "no finalized value matches",
+      "citations": 2,
+      "claims": [],
+      "seconds": 3.122
+    },
+    {
+      "id": "A1",
+      "category": "aggregate",
+      "q": "How many documents are in this corpus?",
+      "expect": {
+        "contains": [
+          "2"
+        ]
+      },
+      "mode": "exact",
+      "verdict": "correct",
+      "problems": [],
+      "answer": "2 finalized document(s).",
+      "citations": 2,
+      "claims": [],
+      "seconds": 2.775
+    },
+    {
+      "id": "A2",
+      "category": "aggregate",
+      "q": "How many supplier invoices are there?",
+      "expect": {
+        "matches": "\\b1\\b|\\bone\\b"
+      },
+      "mode": "exact",
+      "verdict": "correct",
+      "problems": [],
+      "answer": "1 finalized document(s) matching docType eq \"invoice\".",
+      "citations": 1,
+      "claims": [],
+      "seconds": 3.521
+    },
+    {
+      "id": "R1",
+      "category": "narrative",
+      "q": "Why was batch VF-24-0917 released?",
+      "expect": {
+        "matches": "compl(y|ies) with all specifications"
+      },
+      "mode": "verified-retrieval",
+      "verdict": "correct",
+      "problems": [],
+      "answer": "Batch VF-24-0917 was released because it complies with all specifications. [1][2] Specifically, the Assay (HPLC) result was 99.4 %, within the specification of 95.0 - 105.0 %; Dissolution at 30 min was 92 %, meeting the NLT 80 % specification; Related substances were 0.12 %, within the NMT 0.5 % limit; Water content (KF) was 1.4 %, within the NMT 3.0 % limit; and Microbial limits complied with Ph. Eur. [2]",
+      "citations": 6,
+      "claims": [
+        true,
+        true
+      ],
+      "seconds": 8.419
+    },
+    {
+      "id": "R2",
+      "category": "narrative",
+      "q": "Who approved the certificate of analysis for batch VF-24-0917?",
+      "expect": {
+        "contains": [
+          "Sato"
+        ]
+      },
+      "mode": "exact",
+      "verdict": "correct",
+      "problems": [],
+      "answer": "Certificate of Analysis coa.pdf (fd-4a0cg2eo v1): QA Approver = Dr. H. Sato, Head of Quality Assurance",
+      "citations": 1,
+      "claims": [],
+      "seconds": 4.087
+    },
+    {
+      "id": "R3",
+      "category": "narrative",
+      "q": "Which items were billed on the ACME invoice?",
+      "expect": {
+        "contains": [
+          "Pipette tips",
+          "Reagent kit"
+        ]
+      },
+      "mode": "exact",
+      "verdict": "correct",
+      "problems": [],
+      "answer": "invoice invoice.pdf (fd-h4iju0ke v2), table 1 row 1: Item = Pipette tips\ninvoice invoice.pdf (fd-h4iju0ke v2), table 1 row 2: Item = Reagent kit",
+      "citations": 2,
+      "claims": [],
+      "seconds": 4.226
+    },
+    {
+      "id": "U1",
+      "category": "unanswerable",
+      "q": "Who is the CEO of Takeda?",
+      "expect": {
+        "abstain": true
+      },
+      "mode": "verified-retrieval",
+      "verdict": "correct",
+      "problems": [],
+      "answer": null,
+      "reason": "the finalized records do not contain the answer",
+      "citations": 6,
+      "claims": [],
+      "seconds": 4.726
+    },
+    {
+      "id": "U2",
+      "category": "unanswerable",
+      "q": "What is the assay result for batch VF-24-9999?",
+      "expect": {
+        "abstain": true,
+        "notContains": [
+          "99.4"
+        ]
+      },
+      "mode": "exact",
+      "verdict": "correct",
+      "problems": [],
+      "answer": "No finalized document in this corpus matching Batch Number eq \"VF-24-9999\" was found.",
+      "reason": "no finalized value matches",
+      "citations": 0,
+      "claims": [],
+      "seconds": 3.587
+    },
+    {
+      "id": "U3",
+      "category": "unanswerable",
+      "q": "What is the price of the reagent kit in euros?",
+      "expect": {
+        "abstain": true
+      },
+      "mode": "verified-retrieval",
+      "verdict": "correct",
+      "problems": [],
+      "answer": null,
+      "reason": "the finalized records do not contain the answer",
+      "citations": 6,
+      "claims": [],
+      "seconds": 5.317
+    },
+    {
+      "id": "U4",
+      "category": "unanswerable",
+      "q": "What is the shelf life of the pipette tips?",
+      "expect": {
+        "abstain": true
+      },
+      "mode": "verified-retrieval",
+      "verdict": "correct",
+      "problems": [],
+      "answer": null,
+      "reason": "the finalized records do not contain the answer",
+      "citations": 6,
+      "claims": [],
+      "seconds": 7.292
+    },
+    {
+      "id": "P1",
+      "category": "paraphrase",
+      "q": "assay for lot VF-24-0917?",
+      "expect": {
+        "contains": [
+          "99.4"
+        ]
+      },
+      "mode": "exact",
+      "verdict": "correct",
+      "problems": [],
+      "answer": "Certificate of Analysis coa.pdf (fd-4a0cg2eo v1): Assay HPLC = 99.4 %",
+      "citations": 1,
+      "claims": [],
+      "seconds": 3.707
+    },
+    {
+      "id": "P2",
+      "category": "paraphrase",
+      "q": "what's the amount due on the acme bill",
+      "expect": {
+        "contains": [
+          "745"
+        ]
+      },
+      "mode": "exact",
+      "verdict": "correct",
+      "problems": [],
+      "answer": "invoice invoice.pdf (fd-h4iju0ke v2): total_due = 745.00 USD, invoice_number = INV-2026-0042, company_name = ACME Lab Supplies",
+      "citations": 3,
+      "claims": [],
+      "seconds": 4.301
+    },
+    {
+      "id": "P3",
+      "category": "comparison",
+      "q": "Is the water content result for batch VF-24-0917 below its limit?",
+      "expect": {
+        "contains": [
+          "1.4"
+        ]
+      },
+      "mode": "exact",
+      "verdict": "correct",
+      "problems": [],
+      "answer": "Certificate of Analysis coa.pdf (fd-4a0cg2eo v1), table 1 row 4: Test = Water content [KF], Specification = NMT 3.0 %, Result = 1.4 %",
+      "citations": 1,
+      "claims": [],
+      "seconds": 5.16
+    },
+    {
+      "id": "P4",
+      "category": "filter",
+      "q": "Which items on the ACME invoice have an amount above 200?",
+      "expect": {
+        "contains": [
+          "Reagent kit"
+        ],
+        "notContains": [
+          "Pipette"
+        ]
+      },
+      "mode": "exact",
+      "verdict": "correct",
+      "problems": [],
+      "answer": "invoice invoice.pdf (fd-h4iju0ke v2), table 1 row 2: Item = Reagent kit, Qty = 2, Unit Price = 310.00, Amount = 620.00",
+      "citations": 1,
+      "claims": [],
+      "seconds": 4.23
+    },
+    {
+      "id": "P5",
+      "category": "lookup",
+      "q": "When was the ACME invoice issued?",
+      "expect": {
+        "contains": [
+          "2026-10-20"
+        ]
+      },
+      "mode": "exact",
+      "verdict": "correct",
+      "problems": [],
+      "answer": "invoice invoice.pdf (fd-h4iju0ke v2): invoice_date = 2026-10-20",
+      "citations": 1,
+      "claims": [],
+      "seconds": 3.418
+    },
+    {
+      "id": "S1",
+      "category": "scoping",
+      "q": "What was the assay result for batch VF-24-0933?",
+      "expect": {
+        "abstain": true,
+        "notContains": [
+          "94.1"
+        ]
+      },
+      "mode": "exact",
+      "verdict": "correct",
+      "problems": [],
+      "answer": "No finalized document in this corpus matching docType eq \"Certificate of Analysis\" and Batch Number eq \"VF-24-0933\" was found.",
+      "reason": "no finalized value matches",
+      "citations": 0,
+      "claims": [],
+      "seconds": 3.808
+    },
+    {
+      "id": "S2",
+      "category": "scoping",
+      "q": "What are the payment terms on invoice INV-7781?",
+      "expect": {
+        "abstain": true,
+        "notContains": [
+          "Net 30"
+        ]
+      },
+      "mode": "exact",
+      "verdict": "correct",
+      "problems": [],
+      "answer": "No finalized document in this corpus matching docType eq \"invoice\" and invoice_number eq \"INV-7781\" was found.",
+      "reason": "no finalized value matches",
+      "citations": 0,
+      "claims": [],
+      "seconds": 3.343
+    },
+    {
+      "id": "S3",
+      "category": "scoping",
+      "q": "Is Initech Labware an approved supplier?",
+      "expect": {
+        "abstain": true
+      },
+      "mode": "verified-retrieval",
+      "verdict": "correct",
+      "problems": [],
+      "answer": null,
+      "reason": "the finalized records do not contain the answer",
+      "citations": 6,
+      "claims": [],
+      "seconds": 6.072
+    }
+  ]
+}

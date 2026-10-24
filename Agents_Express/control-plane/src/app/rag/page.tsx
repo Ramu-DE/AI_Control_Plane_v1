@@ -35,10 +35,19 @@ interface Eligible {
 }
 interface Health { factory: { configured: boolean; ok: boolean; detail: string }; qdrant: { configured: boolean }; patterns: Pattern[] }
 interface Answer {
-  answer: string; faithfulness: number | null; elapsedMs: number; pattern: string;
-  passages: { score: number | null; text: string; window?: string; documentId?: string; finalizedDocumentId?: string;
-    version?: number; docType?: string; chunkKind?: string; pageNum?: number }[];
+  mode: "exact" | "verified-retrieval";
+  answer: string | null;
+  abstained: boolean;
+  reason?: string;
+  route: { route: string; reason: string; plan?: unknown; model?: string; planErrors?: string[] };
+  rows?: Record<string, unknown>[];
+  citations: { n: number; finalizedDocumentId: string; documentId: string; version: number; docType?: string; ref: string;
+    text?: string; score?: number | null; lexical?: boolean }[];
+  claims?: { text: string; citations: number[]; supported: boolean; problems: string[]; verifier?: string }[];
+  pattern: string;
+  elapsedMs: number;
 }
+const cellText = (v: unknown) => (v === null || v === undefined ? "—" : typeof v === "string" ? v : JSON.stringify(v));
 
 const STATUS_STYLE: Record<string, string> = {
   Draft: "bg-slate-100 text-slate-600",
@@ -472,22 +481,56 @@ export default function RagFactoryPage() {
                     </div>
                     {answer && (
                       <div className="space-y-3">
-                        <div className="whitespace-pre-wrap rounded-lg bg-slate-50 p-3 text-sm">{answer.answer}</div>
-                        <p className="text-xs text-slate-500">
-                          Pattern {answer.pattern} · faithfulness {answer.faithfulness ?? "n/a"} · {(answer.elapsedMs / 1000).toFixed(1)} s
-                        </p>
+                        <div className="flex flex-wrap items-center gap-2 text-xs">
+                          {answer.mode === "exact"
+                            ? <span className="badge bg-green-50 text-green-700">✓ Exact: computed from finalized fields</span>
+                            : <span className="badge bg-indigo-50 text-indigo-700">Verified retrieval: every statement checked against its source</span>}
+                          {answer.abstained && <span className="badge bg-amber-50 text-amber-800">⚠ No answer given</span>}
+                          <span className="text-slate-500">{(answer.elapsedMs / 1000).toFixed(1)} s · {answer.route.reason}</span>
+                        </div>
+                        {answer.abstained ? (
+                          <div className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">
+                            The finalized records do not give a verifiable answer: {answer.reason}.
+                            {answer.citations.length > 0 && " The closest sources are listed below."}
+                          </div>
+                        ) : (
+                          <div className="whitespace-pre-wrap rounded-lg bg-slate-50 p-3 text-sm">{answer.answer}</div>
+                        )}
+                        {answer.rows && answer.rows.length > 0 && (
+                          <div className="overflow-x-auto">
+                            <table className="text-xs">
+                              <thead><tr>{Object.keys(answer.rows[0]).map((k) => <th key={k} className="border px-2 py-1 text-left">{k}</th>)}</tr></thead>
+                              <tbody>{answer.rows.map((r, i) => (
+                                <tr key={i}>{Object.keys(answer.rows![0]).map((k) => <td key={k} className="border px-2 py-1">{cellText(r[k])}</td>)}</tr>
+                              ))}</tbody>
+                            </table>
+                          </div>
+                        )}
+                        {answer.claims && answer.claims.length > 0 && (
+                          <ul className="space-y-1 text-xs">
+                            {answer.claims.map((c, i) => (
+                              <li key={i} className={c.supported ? "text-green-800" : "text-red-700"}>
+                                {c.supported ? "✓" : "✕"} {c.text}
+                                {!c.supported && c.problems.length > 0 && <span className="text-slate-500"> ({c.problems.join("; ")})</span>}
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                        {answer.route.plan !== undefined && (
+                          <details className="text-xs text-slate-500">
+                            <summary className="cursor-pointer">Query plan ({answer.route.model})</summary>
+                            <pre className="mt-1 overflow-auto rounded bg-slate-900 p-2 text-slate-100">{JSON.stringify(answer.route.plan, null, 2)}</pre>
+                            {answer.route.planErrors && <p className="mt-1 text-amber-800">Rejected: {answer.route.planErrors.join("; ")}</p>}
+                          </details>
+                        )}
                         <ol className="space-y-2">
-                          {answer.passages.map((p, i) => (
-                            <li key={i} className="rounded border p-2 text-xs">
+                          {answer.citations.map((c) => (
+                            <li key={c.n} className="rounded border p-2 text-xs">
                               <div className="mb-1 text-slate-500">
-                                [{i + 1}] score {p.score?.toFixed(3) ?? "—"} · {p.chunkKind} · {p.docType} ·
-                                <span className="font-mono"> {p.finalizedDocumentId} v{p.version}</span>
-                                {p.pageNum ? ` · page ${p.pageNum}` : ""}
+                                [{c.n}] {c.docType} · <span className="font-mono">{c.finalizedDocumentId} v{c.version}</span> · {c.ref}
+                                {typeof c.score === "number" ? ` · similarity ${c.score.toFixed(3)}` : ""}{c.lexical ? " · exact identifier match" : ""}
                               </div>
-                              <div className="whitespace-pre-wrap">{p.text}</div>
-                              {p.window && p.window !== p.text && (
-                                <div className="mt-1 whitespace-pre-wrap text-slate-500">Window: {p.window}</div>
-                              )}
+                              {c.text && <div className="whitespace-pre-wrap">{c.text}</div>}
                             </li>
                           ))}
                         </ol>

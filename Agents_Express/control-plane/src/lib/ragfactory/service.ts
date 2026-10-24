@@ -20,7 +20,12 @@ import { RAG_FACTORY_TOOL } from "../regulatory";
 import type { KnowledgeConfig, RegistryRecord } from "../types";
 import type { Corpus, CorpusBuild, CorpusMember } from "./model";
 import { PATTERNS, collectionFor, patternById, profileCorpus, recommendPattern } from "./patterns";
-import { ragIngestFinalized, ragQuery } from "./client";
+import { ragDecisionQuery, ragIngestFinalized } from "./client";
+import type { DecisionResult } from "./client";
+import { checkPlan, corpusVocabulary, executePlan, requestedUnitMissing } from "./fieldQuery";
+import type { FieldPlan } from "./fieldQuery";
+import { routeQuestion } from "./planner";
+import type { FinalizedDocument } from "../docintel/contract";
 
 export class RagCorpusError extends Error {
   readonly code: string;
@@ -458,41 +463,113 @@ export function onDocumentFinalized(rec: FinalizedDocumentRecord, ingest = ragIn
 // Query
 // --------------------------------------------------------------------------- //
 
+export interface CorpusAnswer {
+  /** exact = executed over finalized fields; verified-retrieval = cited, claim-checked passages. */
+  mode: "exact" | "verified-retrieval";
+  answer: string | null;
+  abstained: boolean;
+  reason?: string;
+  route: { route: "structured" | "narrative"; reason: string; plan?: FieldPlan; model?: string; planErrors?: string[] };
+  rows?: Record<string, unknown>[];
+  citations: {
+    n: number; finalizedDocumentId: string; documentId: string; version: number; docType?: string;
+    ref: string; text?: string; score?: number | null; lexical?: boolean;
+  }[];
+  claims?: DecisionResult["claims"];
+  pattern: string;
+  elapsedMs: number;
+}
+
+/**
+ * Answer a question over a built corpus.
+ *
+ *   structured  (values, lists, counts, out-of-spec rows): a model PLANS over
+ *               the corpus vocabulary; the plan is validated and EXECUTED over
+ *               the four-eyes-finalized fields. No model produces a value.
+ *   narrative   the factory's decision path: current versions only, hybrid
+ *               retrieval, every sentence cited and verified, else abstain.
+ */
 export async function queryCorpus(input: {
   corpusId: string;
   personaId: string;
   question: string;
   filters?: Record<string, string | number | boolean>;
-}, query = ragQuery) {
+}, deps: { route?: typeof routeQuestion; decision?: typeof ragDecisionQuery } = {}): Promise<CorpusAnswer> {
+  const route = deps.route ?? routeQuestion;
+  const decision = deps.decision ?? ragDecisionQuery;
+  const t0 = Date.now();
   const c = corpus(input.corpusId);
   const p = persona(input.personaId);
   authorizeCorpus(p.id, c.tenantId, "queryCorpus", c.corpusId);
   const lastGood = c.builds.find((b) => b.status === "succeeded" || b.status === "partial");
   if (!c.collection || !lastGood) throw new RagCorpusError("NOT_BUILT", "the corpus has no successful build yet", 409);
   const question = input.question.trim().slice(0, 2000);
-  if (!question) throw new RagCorpusError("QUESTION_REQUIRED", "ask a question");
+  if (question.length < 3) throw new RagCorpusError("QUESTION_REQUIRED", "ask a question");
   const pattern = patternById(c.patternId) ?? PATTERNS[PATTERNS.length - 1];
-  const out = await query({ collection: c.collection, query: question, topK: pattern.topK, filters: input.filters },
-    { tenantId: c.tenantId, personaId: p.id });
+  const docs = c.members.map((m) => finalizedRecord(m.finalizedDocumentId)?.doc).filter((d): d is FinalizedDocument => Boolean(d));
+
+  let routed: CorpusAnswer["route"];
+  try {
+    routed = await route(question, corpusVocabulary(docs));
+  } catch (e) {
+    routed = { route: "narrative", reason: `planner unavailable (${(e as Error).message.slice(0, 120)}); using verified retrieval` };
+  }
+
+  let out: CorpusAnswer | null = null;
+  if (routed.route === "structured" && routed.plan) {
+    const planErrors = checkPlan(routed.plan, docs);
+    if (planErrors.length) {
+      routed = { ...routed, route: "narrative", planErrors, reason: `plan rejected (${planErrors.join("; ")}); using verified retrieval` };
+    } else {
+      let r = executePlan(routed.plan, docs);
+      // An exact text filter that matched nothing is retried as a partial match
+      // ("ACME" -> "ACME Lab Supplies"), and the answer says so. Identifiers
+      // with digits are never relaxed: a lot number either matches or it doesn't.
+      const relaxable = (routed.plan.documentFilters ?? []).filter((f) => f.op === "eq" && !/\d/.test(f.value));
+      if (r.empty && relaxable.length) {
+        const relaxed = { ...routed.plan, documentFilters: routed.plan.documentFilters.map((f) =>
+          relaxable.includes(f) ? { ...f, op: "contains" as const } : f) };
+        const r2 = executePlan(relaxed, docs);
+        if (!r2.empty) {
+          r = { ...r2, answer: `No exact match for ${relaxable.map((f) => `${f.field} = "${f.value}"`).join(", ")}; ` +
+            `matched by partial name:\n${r2.answer}` };
+          routed = { ...routed, plan: relaxed, reason: `${routed.reason} (exact name match relaxed to partial match)` };
+        }
+      }
+      const unitProblem = r.empty ? null : requestedUnitMissing(question, r.answer + " " + JSON.stringify(r.rows));
+      if (unitProblem) {
+        r.answer = "";
+        r.rows = [];
+      }
+      out = unitProblem ? {
+        mode: "exact", answer: null, abstained: true, reason: unitProblem, route: routed, pattern: pattern.id, elapsedMs: Date.now() - t0,
+        citations: r.citations.map((x, i) => ({ n: i + 1, finalizedDocumentId: x.finalizedDocumentId, documentId: x.documentId,
+          version: x.version, docType: x.docType, ref: x.ref })),
+      } : {
+        mode: "exact", answer: r.answer, abstained: false, ...(r.empty ? { reason: "no finalized value matches" } : {}),
+        route: routed, rows: r.rows, pattern: pattern.id, elapsedMs: Date.now() - t0,
+        citations: r.citations.map((x, i) => ({ n: i + 1, finalizedDocumentId: x.finalizedDocumentId, documentId: x.documentId,
+          version: x.version, docType: x.docType, ref: x.ref })),
+      };
+    }
+  }
+  if (!out) {
+    const d = await decision({
+      collection: c.collection, query: question, topK: Math.max(pattern.topK, 6),
+      allowedFinalizedIds: c.members.map((m) => m.finalizedDocumentId), filters: input.filters,
+    }, { tenantId: c.tenantId, personaId: p.id });
+    out = {
+      mode: "verified-retrieval", answer: d.answer, abstained: d.abstained, ...(d.reason ? { reason: d.reason } : {}),
+      route: routed, claims: d.claims, pattern: pattern.id, elapsedMs: Date.now() - t0,
+      citations: d.citations.map((x) => ({
+        n: x.n, finalizedDocumentId: x.finalized_document_id, documentId: x.doc_id, version: x.version, docType: x.doc_type,
+        ref: [x.chunk_kind ?? "text", x.page_num ? `page ${x.page_num}` : null].filter(Boolean).join(", "),
+        text: x.text, score: x.score ?? null, lexical: x.lexical,
+      })),
+    };
+  }
   logAudit({ category: "kb", action: "corpus-query", actor: p.name, tenantId: c.tenantId,
-    detail: `Asked corpus '${c.name}' (${pattern.id}): ${out.retrieved_chunks.length} passage(s), ` +
-      `faithfulness ${out.faithfulness ?? "n/a"}` });
-  return {
-    answer: out.answer,
-    faithfulness: out.faithfulness,
-    elapsedMs: out.elapsed_ms,
-    pattern: pattern.id,
-    passages: out.retrieved_chunks.map((ch, i) => ({
-      score: out.scores[i] ?? null,
-      text: String(ch.text ?? "").slice(0, 1200),
-      window: typeof ch.window_text === "string" ? ch.window_text.slice(0, 1600) : undefined,
-      documentId: ch.doc_id as string | undefined,
-      finalizedDocumentId: ch.finalized_document_id as string | undefined,
-      version: ch.version as number | undefined,
-      docType: ch.doc_type as string | undefined,
-      chunkKind: ch.chunk_kind as string | undefined,
-      pageNum: ch.page_num as number | undefined,
-    })),
-    guards: out.guard_log,
-  };
+    detail: `Asked corpus '${c.name}' [${out.mode}${out.abstained ? ", abstained" : ""}]: ` +
+      `${out.citations.length} citation(s)${out.reason ? ` — ${out.reason}` : ""}` });
+  return out;
 }

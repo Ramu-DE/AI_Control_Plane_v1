@@ -115,3 +115,33 @@ flowchart TB
 | **E** | **Golden sets and regression gates.** A frozen field golden set per Document Type (from four-eyes finalized records); a golden **Q&A** set per BU (lookup / aggregate / comparison / narrative / unanswerable); gates on every model, prompt, calibrator or index change; PSI drift monitoring; ML-6 few-shot from corrections and an active-learning review queue. | All | Turns "accuracy" into a number with a confidence interval that QA can sign. | M |
 
 **Data reality.** About 20 finalized documents exist, mostly test documents. With B, the system will **refuse to auto-accept** until each type has roughly 600+ human-verified auto-accept candidates for a 99.5% claim. That is correct GxP behaviour: straight-through processing grows with evidence. Increment A gives exact answers for lookup questions **from day one**, because those answers come from four-eyes-verified fields, not from model inference.
+
+---
+
+## 5. Status: increment A built and measured live (2026-10-24)
+
+**What runs**
+- **Factory `POST /query/decision`** (`rag_factory/decision_query.py`, branch `phase3/decision-safe`):
+  - restricted to the tenant and the corpus's current finalized versions;
+  - dense retrieval plus exact identifier matching (Qdrant full-text index), fused by RRF;
+  - identity-labelled context; every sentence must cite, otherwise NOT_FOUND;
+  - claim checks: citation present, every number and ID found in the cited text, then a strict entailment judge;
+  - one regeneration, then abstain.
+- **Factory fail-closed fixes:** negation is detected but **never rewritten**, and CorrectiveRAG **abstains** instead of answering from model knowledge.
+- **Control plane** (`lib/ragfactory/planner.ts`, `fieldQuery.ts`, `service.ts`). A Bedrock planner sees field names and table columns, never values, and returns a plan through forced tool use. The plan is validated against the corpus vocabulary and **executed exactly** over four-eyes-finalized fields and tables:
+  - lookups, out-of-specification rows (computed by the P2 specification parser), counts, aggregates;
+  - currency guard: no answer in a currency the record does not state;
+  - exact-name filters relaxed to partial match only when nothing matched, and disclosed in the answer.
+
+  Anything else goes to the verified retrieval path.
+- **UI** (RAG Factory → Ask) shows the mode (*Exact* / *Verified retrieval*), citations, each claim with ✓/✕, the query plan, and abstentions.
+
+**Live evaluation** (`integration/rag_accuracy_eval.mjs`, golden set `integration/golden/rnd-supplier-qa.json`): 28 questions against Qdrant Cloud and Bedrock. They cover lookup, negation, aggregate, narrative, paraphrase, filter, unanswerable, and documents that exist in the tenant but not in the corpus.
+
+| Run | Answered correctly | Wrong | Correct abstentions | Coverage | Precision (95% lower bound) |
+|---|---|---|---|---|---|
+| 1 (before fixes) | 15/16 answered | 0 wrong values; 1 answered in the wrong currency | 3/4 | 94% | 94% |
+| 3 (after fixes) | **21/21** | **0** | **7/7** | **100%** | **100% (≥ 86.7%)** |
+| 4 (repeat) | 21/21 | 0 | 7/7 | 100% | 100% |
+
+The lower bound is honest about sample size: 28 questions prove ≥ 86.7%. Claiming ≥ 99.5% needs about 600 graded questions with zero errors, which is why the golden set must grow per BU (increment E). Every miss found so far was an **abstention or a refusal**, not a wrong value.
