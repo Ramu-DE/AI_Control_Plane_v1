@@ -14,7 +14,8 @@ SaaS features for a regulated-pharma (Takeda) context.
 > are modeled-but-not-wired to live AWS are called out in "What's real vs. simulated".
 
 > **Start here:** [`docs/modules/`](docs/modules/README.md) has a folder per module explaining every file, how it flows,
-> and how the modules connect.
+> and how the modules connect. [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) has the architecture and
+> flow diagrams (Mermaid).
 > [`SETUP.md`](SETUP.md) is the current run guide. State is now **durable** (JSON snapshot), and
 > some notes below about in-memory state predate that.
 

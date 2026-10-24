@@ -34,6 +34,8 @@ from.
 
 ## The big picture
 
+Full Mermaid architecture and flow diagrams: [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md).
+
 ```
                          ┌──────────────────────── control plane (Next.js) ────────────────────────┐
   people (personas,      │  Settings/Tenants   Registry     Agents    Workflows   Graph Sources  KG  │
