@@ -29,7 +29,7 @@ import { applyEdits, draftReview } from "./review";
 import { publishToDelta } from "./delta";
 import { onDocumentFinalized } from "../ragfactory/service";
 import { availableTypes, classifyToType, ucMasterDataLookup, usableType } from "./doctypes";
-import type { DocumentType } from "./doctypes";
+import type { DocTypeSpec, DocumentType } from "./doctypes";
 import { blockingIssues, mapFieldsToSchema, validateReview } from "./validation";
 import type { FieldScore } from "./validation";
 import { candidatesBySchemaField, consensus, features, sameValue, sourceTextOf } from "./accuracy";
@@ -234,9 +234,14 @@ export function startRun(input: {
   logAudit({ category: "agent", action: "docintel-run", actor: p.name, tenantId: j.tenantId,
     detail: `Extraction of ${j.documentId} started: ${methods.join(", ")} × ${capabilities.join(", ")}` });
 
+  const schemaFor = (spec?: DocTypeSpec) => spec?.fields.map((f) => ({
+    name: f.name, label: f.label, type: f.type, required: f.required, synonyms: f.synonyms,
+  }));
   void (async () => {
     try {
-      const runs = await run({ idpDocumentId: j.idpDocumentId!, ref: j.idpRef!, methods, capabilities },
+      // A type chosen at upload guides extraction from the first pass (C).
+      const runs = await run({ idpDocumentId: j.idpDocumentId!, ref: j.idpRef!, methods, capabilities,
+        ...(typeSpec ? { fieldSchema: schemaFor(typeSpec) } : {}) },
         { tenantId: j.tenantId, personaId: p.id });
       j.methodRuns = runs;
       const best = bestRun(runs);
@@ -249,6 +254,30 @@ export function startRun(input: {
         // A finalized document being re-reviewed keeps its review until changed.
         if (!j.review || j.finalizedDocumentIds.length === 0) {
           j.review = prepareReview(j, best, p.id, true);
+          // Detected type with required fields no method found: one targeted,
+          // schema-guided pass with the strongest completed method, kept as
+          // its own "method" so consensus and calibration measure it separately.
+          const t = jobType(j);
+          const missing = t?.published!.spec.fields.filter((f) => f.required &&
+            !j.review!.fields.some((x) => x.name === f.name && x.value !== null && String(x.value).trim() !== "")) ?? [];
+          if (t && missing.length && !typeSpec) {
+            const order = ["claude-sonnet", "claude-haiku", "nova-pro", "nova-lite"];
+            const done = runs.filter((r) => r.status === "complete").map((r) => r.method);
+            const m = order.find((x) => done.includes(x)) ?? done[0];
+            try {
+              const [second] = await run({ idpDocumentId: j.idpDocumentId!, ref: j.idpRef!, methods: [m],
+                capabilities: ["kv_extraction"], fieldSchema: schemaFor(t.published!.spec) }, { tenantId: j.tenantId, personaId: p.id });
+              if (second?.status === "complete") {
+                j.methodRuns = [...runs, { ...second, method: `${m}+schema` }];
+                j.review = prepareReview(j, best, p.id, true);
+              }
+              logAudit({ category: "agent", action: "docintel-schema-pass", actor: p.name, tenantId: j.tenantId,
+                detail: `${j.documentId}: schema-guided pass with ${m} for missing ${missing.map((f) => f.name).join(", ")} (${second?.status ?? "no result"})` });
+            } catch (e) {
+              logAudit({ category: "agent", action: "docintel-schema-pass-failed", actor: p.name, tenantId: j.tenantId,
+                detail: `${j.documentId}: ${(e as Error).message.slice(0, 200)}` });
+            }
+          }
           await validateJob(j);
           j.status = "extracted";
           await route(j, p.id);

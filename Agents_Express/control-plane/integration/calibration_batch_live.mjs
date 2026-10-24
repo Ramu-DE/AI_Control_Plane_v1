@@ -177,7 +177,11 @@ await Promise.all(Array.from({ length: 4 }, async () => {
   while (queue.length) {
     const d = queue.shift();
     try {
-      const r = await processOne(d);
+      let r;
+      for (let attempt = 1; ; attempt++) {
+        try { r = await processOne(d); break; }
+        catch (e) { if (attempt >= 2) throw e; console.log(`  ${d.file.padEnd(16)} retrying after: ${e.message}`); }
+      }
       results.push(r);
       const ok = r.draft ? Object.values(r.draft).filter(Boolean).length : 0;
       console.log(`  ${d.file.padEnd(16)} ${r.error ?? `${r.route?.padEnd(16)} draft ${ok}/${Object.keys(d.truth).length} correct -> ${r.fd}`}`);

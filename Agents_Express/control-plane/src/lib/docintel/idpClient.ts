@@ -146,7 +146,8 @@ export function methodRunsFromEvents(events: unknown[], methods: string[]): Meth
 
 /** Run methods on a document the control plane uploaded. */
 export async function idpProcess(
-  input: { idpDocumentId: string; ref: string; methods: string[]; capabilities: string[] },
+  input: { idpDocumentId: string; ref: string; methods: string[]; capabilities: string[];
+    fieldSchema?: { name: string; label?: string; type?: string; required?: boolean; synonyms?: string[] }[] },
   caller: IdpCaller,
   timeoutMs = 10 * 60 * 1000
 ): Promise<MethodRun[]> {
@@ -159,6 +160,7 @@ export async function idpProcess(
       s3Uri: input.ref,
       methods: input.methods,
       capabilities: input.capabilities,
+      ...(input.fieldSchema?.length ? { fieldSchema: input.fieldSchema } : {}),
     }),
     signal: AbortSignal.timeout(timeoutMs),
   });

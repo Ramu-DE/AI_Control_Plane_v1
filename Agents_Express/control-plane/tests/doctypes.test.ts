@@ -314,3 +314,23 @@ test("analytics report STP, corrections, exceptions and method quality from stor
   assert.ok(a.totals.exceptionsOpen >= 1);
   assert.ok(a.totals.totalCostUsd > 0);
 });
+
+test("a detected type with a required field missing gets one schema-guided pass, measured as its own method", async () => {
+  const j = newJob("fn-rnd", "persona-priya");
+  const calls: { methods: string[]; capabilities: string[]; fieldSchema?: { name: string }[] }[] = [];
+  const noBatch = coaRun();
+  delete (noBatch.results.kv_extraction.data as Record<string, unknown>)["Batch Number"];
+  startRun({ documentId: j.documentId, personaId: "persona-priya" }, async (input) => {
+    calls.push(input);
+    if (calls.length === 1) return [noBatch];
+    return [{ ...coaRun(), results: { kv_extraction: { data: { batch_number: "VF-24-0917" }, confidence: 0.9, format: "json" } } }];
+  });
+  for (let i = 0; i < 50 && j.status === "processing"; i++) await new Promise((r) => setTimeout(r, 5));
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls[1].methods, ["claude-sonnet"]);
+  assert.deepEqual(calls[1].capabilities, ["kv_extraction"]);
+  assert.ok(calls[1].fieldSchema?.some((f) => f.name === "batch_number"));
+  assert.ok(j.methodRuns.some((r) => r.method === "claude-sonnet+schema"));
+  assert.equal(j.review!.fields.find((f) => f.name === "batch_number")?.value, "VF-24-0917");
+});
