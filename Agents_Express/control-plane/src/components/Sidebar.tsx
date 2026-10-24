@@ -73,6 +73,7 @@ const GROUPS: NavGroup[] = [
       { href: "/graph", label: "Graph Sources", icon: "gateway" },
       { href: "/a2a", label: "A2A Peers", icon: "agents" },
       { href: "/kg", label: "Knowledge Graph", icon: "gateway" },
+      { href: "/documents", label: "Document Intelligence", icon: "policy" },
     ],
   },
   {

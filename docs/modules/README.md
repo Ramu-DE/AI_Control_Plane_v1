@@ -8,6 +8,7 @@ flow, and how it connects to the other modules.
 docs/modules/
 ├── README.md                  ← this map
 ├── control-plane/             ← Agents_Express/control-plane (overview, lib, UI/API/tests)
+├── document-intelligence/     ← control-plane lib/docintel + IDP sidecar (upload → review → finalize)
 ├── graph-utility/             ← graph-utility
 ├── a2a-demo/                  ← a2a-demo
 ├── saas-gaming-app/           ← saas-gaming-app
@@ -24,6 +25,7 @@ from.
 | Module (code) | What it is | Language | Guide folder |
 |---|---|---|---|
 | `Agents_Express/control-plane` | **The control plane**: UI + HTTP API. Registry, agents, workflows, Cedar policy, tenants, personas, graph sources, knowledge bases, A2A, memory. | TypeScript / Next.js 15 | [`control-plane/`](control-plane/README.md) |
+| `control-plane/src/lib/docintel` | **Document Intelligence**: IDP extraction behind the control plane, maker-checker finalization into `FinalizedDocument v1` + Delta. | TypeScript (+ IDP sidecar) | [`document-intelligence/`](document-intelligence/README.md) |
 | `graph-utility` | **Ontology-first, dataset-agnostic knowledge-graph builder** (+ legacy OMDA query engine). Builds a graph from an ontology over any dataset; loads it into Neo4j and/or Neptune. | Python | [`graph-utility/`](graph-utility/README.md) |
 | `a2a-demo` | Reference A2A peer agents (Sales ⇄ Supply Chain) on Bedrock with shared memory. Reference only: not imported by the control plane. | Python | [`a2a-demo/`](a2a-demo/README.md) |
 | `saas-gaming-app` | SaaS reference app: the source of the tenant-tier / middleware patterns the control plane's tenancy adopted. | TypeScript / Express | [`saas-gaming-app/`](saas-gaming-app/README.md) |

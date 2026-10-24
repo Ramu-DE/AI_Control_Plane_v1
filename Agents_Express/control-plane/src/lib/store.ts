@@ -34,6 +34,14 @@ import type {
 import { normalizeAgentCompute } from "./runtimes";
 import { recoverInterruptedRuns } from "./workflow/recover";
 import { upgradePersonas } from "./personas";
+import type { DocumentJob } from "./docintel/model";
+import type { FinalizedDocument } from "./docintel/contract";
+
+/** A finalized document as stored: the v1 contract plus where it was published. */
+export interface FinalizedDocumentRecord {
+  doc: FinalizedDocument;
+  delta: { status: "written" | "skipped" | "failed" | "pending"; detail?: string; at?: string };
+}
 import { upgradeRegulatoryPolicies } from "./regulatory";
 import { upgradeTenantRegulatory } from "./tenancy";
 import {
@@ -65,6 +73,9 @@ export interface Store {
   routes: ModelRoute[];
   workflows: Workflow[];
   workflowRuns: WorkflowRun[];
+  /** Document Intelligence: jobs and their immutable finalized versions. */
+  documentJobs: DocumentJob[];
+  finalizedDocuments: FinalizedDocumentRecord[];
   audit: AuditEvent[];
 }
 
@@ -1027,6 +1038,8 @@ when {
     ],
     workflows: [],
     workflowRuns: [],
+    documentJobs: [],
+    finalizedDocuments: [],
     audit: [
       {
         id: "evt-1",

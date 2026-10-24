@@ -186,6 +186,16 @@ function token(): string {
 }
 
 async function dbx(path: string, init?: { method?: string; body?: unknown }) {
+  return databricksRequest(path, init);
+}
+
+/**
+ * Authenticated Databricks REST call (host and token from the environment,
+ * host SSRF-checked). Exported for the governed Delta WRITER in
+ * lib/docintel/delta.ts; the UC tools above remain read-only and do their own
+ * statement checks before calling it.
+ */
+export async function databricksRequest(path: string, init?: { method?: string; body?: unknown }) {
   const url = `${host()}${path}`;
   let res: Response;
   try {

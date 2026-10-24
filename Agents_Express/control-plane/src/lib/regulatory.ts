@@ -26,6 +26,10 @@ export const REGULATED_ACTIONS = [
   "callAgent",
   "approveReviewGate",
   "approveRecord",
+  "viewDocument",
+  "processDocument",
+  "reviewDocument",
+  "finalizeDocument",
 ];
 
 const actionList = REGULATED_ACTIONS.map((a) => `Action::"${a}"`).join(", ");
@@ -35,6 +39,9 @@ export const REVIEW_GATE_ACTION = "approveReviewGate";
 /** Approving / rejecting / deprecating Registry records and Graph Sources. */
 export const APPROVALS_TOOL = "approvals";
 export const APPROVE_RECORD_ACTION = "approveRecord";
+/** Document Intelligence (IDP) actions, all on the perimeter tool below. */
+export const DOCINTEL_TOOL = "docintel";
+export const DOCINTEL_ACTIONS = ["viewDocument", "processDocument", "reviewDocument", "finalizeDocument"] as const;
 
 export function regulatoryPolicies(createdAt: string): Policy[] {
   return [
@@ -64,6 +71,20 @@ export function regulatoryPolicies(createdAt: string): Policy[] {
   principal,
   action == Action::"${APPROVE_RECORD_ACTION}",
   resource == Tool::"${APPROVALS_TOOL}"
+);`,
+    },
+    {
+      id: "pol-gw-docintel",
+      name: "Gateway: tenant members may use Document Intelligence (IDP)",
+      layer: "gateway",
+      description:
+        "Perimeter for the Document Intelligence module. The platform already enforces the role minimums (view: viewer, process and review: analyst, finalize: approver, never the submitter); the GxP and residency forbids apply on top.",
+      enabled: true,
+      createdAt,
+      cedar: `permit(
+  principal,
+  action in [${DOCINTEL_ACTIONS.map((a) => `Action::"${a}"`).join(", ")}],
+  resource == Tool::"${DOCINTEL_TOOL}"
 );`,
     },
     {
