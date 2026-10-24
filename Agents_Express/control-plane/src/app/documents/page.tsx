@@ -125,6 +125,12 @@ export default function DocumentsPage() {
 
   const job = jobs.find((j) => j.documentId === selectedId) ?? null;
 
+  // Deep link from the Approval Inbox: /documents?doc=<documentId>
+  useEffect(() => {
+    const d = new URLSearchParams(window.location.search).get("doc");
+    if (d) setSelectedId(d);
+  }, []);
+
   useEffect(() => {
     getJSON<Health>("/api/docintel?health=1").then((h) => {
       setHealth(h);

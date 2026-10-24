@@ -123,8 +123,9 @@ export default function RagFactoryPage() {
 
   useEffect(() => {
     getJSON<Health>("/api/ragfactory?health=1").then(setHealth).catch(() => setHealth(null));
-    const t = new URLSearchParams(window.location.search).get("tenant");
-    if (t) setTenantId(t);
+    const q = new URLSearchParams(window.location.search);
+    if (q.get("tenant")) setTenantId(q.get("tenant")!);
+    if (q.get("corpus")) setSelectedId(q.get("corpus")!);
   }, []);
   useEffect(() => {
     if (!tenants.includes(tenantId)) setTenantId(tenants[0] ?? "");

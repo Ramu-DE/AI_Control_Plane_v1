@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { PageHeader, Pill, EmptyState } from "@/components/ui";
 import { getJSON, sendJSON } from "@/lib/api";
@@ -7,12 +8,27 @@ import { ActingAsSelect, useActingPersona } from "@/components/ActingAs";
 
 interface ApprovalItem {
   id: string;
-  kind: "registry-record" | "library-policy";
+  kind: "registry-record" | "library-policy" | "document" | "corpus";
   name: string;
   detail: string;
   status: string;
   owner: string;
   createdAt: string;
+  submittedBy?: string;
+  tenantId?: string;
+}
+
+const KIND_LABEL: Record<ApprovalItem["kind"], string> = {
+  document: "Document",
+  corpus: "RAG corpus",
+  "registry-record": "Registry",
+  "library-policy": "Policy",
+};
+
+function openHref(it: ApprovalItem): string | null {
+  if (it.kind === "document") return `/documents?doc=${encodeURIComponent(it.id)}`;
+  if (it.kind === "corpus") return `/rag?corpus=${encodeURIComponent(it.id)}`;
+  return null;
 }
 
 export default function ApprovalsPage() {
@@ -22,19 +38,39 @@ export default function ApprovalsPage() {
   const acting = useActingPersona();
 
   async function load() {
-    const d = await getJSON<{ items: ApprovalItem[] }>("/api/approvals");
+    const q = acting.personaId ? `?personaId=${encodeURIComponent(acting.personaId)}` : "";
+    const d = await getJSON<{ items: ApprovalItem[] }>(`/api/approvals${q}`);
     setItems(d.items);
   }
   useEffect(() => {
     load();
-  }, []);
+  }, [acting.personaId]);
 
   // Advance an item one step toward approval, or approve/reject outright.
   async function act(item: ApprovalItem, action: "submit" | "approve" | "reject") {
     setBusy(item.id);
     setError(null);
     try {
-      if (item.kind === "registry-record") {
+      if (item.kind === "document" || item.kind === "corpus") {
+        // Same governed endpoints as the module pages: approver+ in the
+        // item's tenant, never the submitter, GxP / residency apply.
+        if (!acting.personaId) throw new Error("Choose who is acting first.");
+        let note = "";
+        if (action === "reject") {
+          note = window.prompt(item.kind === "document"
+            ? "Why send it back? (shown to the submitter)" : "Why reject this corpus?") ?? "";
+          if (item.kind === "document" && !note.trim()) throw new Error("Sending back needs a note.");
+        }
+        if (item.kind === "document") {
+          await sendJSON("/api/docintel", "POST", {
+            op: action === "reject" ? "sendBack" : "finalize", documentId: item.id, personaId: acting.personaId, note,
+          });
+        } else {
+          await sendJSON("/api/ragfactory", "POST", {
+            op: action === "reject" ? "reject" : "approve", corpusId: item.id, personaId: acting.personaId, note,
+          });
+        }
+      } else if (item.kind === "registry-record") {
         // Maker-checker (lib/approvals.ts): a named submitter, then a DIFFERENT
         // approver. Approving straight from Draft would be one person doing
         // both, so a Draft is only ever submitted here.
@@ -82,12 +118,13 @@ export default function ApprovalsPage() {
 
   const registry = items.filter((i) => i.kind === "registry-record");
   const policy = items.filter((i) => i.kind === "library-policy");
+  const docs = items.filter((i) => i.kind === "document" || i.kind === "corpus");
 
   return (
     <>
       <PageHeader
         title="Approval Inbox"
-        subtitle="Everything awaiting review in one place — registry records and policies. Approve, reject, or submit for review."
+        subtitle="Everything awaiting review in one place: documents to finalize, RAG corpora, registry records and policies. Choose who you are acting as to see what you can decide."
       />
       <div className="px-4 pb-10 sm:px-6 lg:px-8">
         {error && (
@@ -98,9 +135,10 @@ export default function ApprovalsPage() {
         <div className="mb-4">
           <ActingAsSelect {...acting} />
         </div>
-        <div className="mb-5 grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <div className="mb-5 grid grid-cols-1 gap-4 sm:grid-cols-4">
           {[
             ["Pending total", items.length],
+            ["Documents & corpora", docs.length],
             ["Registry records", registry.length],
             ["Policies", policy.length],
           ].map(([l, v]) => (
@@ -134,31 +172,39 @@ export default function ApprovalsPage() {
                     </td>
                     <td className="px-4 py-3">
                       <span className="badge bg-slate-100 text-slate-600">
-                        {it.kind === "registry-record" ? "Registry" : "Policy"}
+                        {KIND_LABEL[it.kind]}
                       </span>
                     </td>
                     <td className="px-4 py-3">
                       <Pill status={it.status} />
                     </td>
-                    <td className="px-4 py-3 text-slate-600">{it.owner}</td>
+                    <td className="px-4 py-3 text-slate-600">
+                      {it.owner}
+                      {it.submittedBy && it.submittedBy === acting.personaId && (
+                        <div className="text-xs text-amber-700">you submitted this; another approver decides</div>
+                      )}
+                    </td>
                     <td className="px-4 py-3">
                       <div className="flex justify-end gap-2">
+                        {openHref(it) && (
+                          <Link className="btn-ghost" href={openHref(it)!}>Open</Link>
+                        )}
                         <button
                           type="button"
                           className="btn-primary"
-                          disabled={busy === it.id}
+                          disabled={busy === it.id || (!!it.submittedBy && it.submittedBy === acting.personaId)}
                           onClick={() => act(it, "approve")}
                         >
-                          Approve
+                          {it.kind === "document" ? "Finalize" : it.kind === "corpus" ? "Approve & build" : "Approve"}
                         </button>
-                        {it.kind === "registry-record" && (
+                        {it.kind !== "library-policy" && (
                           <button
                             type="button"
                             className="btn-ghost"
                             disabled={busy === it.id}
                             onClick={() => act(it, "reject")}
                           >
-                            Reject
+                            {it.kind === "document" ? "Send back" : "Reject"}
                           </button>
                         )}
                       </div>
