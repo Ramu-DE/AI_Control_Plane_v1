@@ -25,9 +25,9 @@
 import { logAudit, store } from "./store";
 import { authorizeModel, type ModelDecision } from "./modelAccess";
 import { executorFor } from "./plane";
-import { runStepOnBedrock } from "./bedrock";
+import { runStepOnBedrock, runStepOnBedrockWithTools } from "./bedrock";
 import { runStepOnDatabricks, runStepOnDatabricksWithTools } from "./databricks";
-import type { ToolCallRecord, ToolSpec } from "./tools/registry";
+import type { ToolCallRecord, ToolContext, ToolSpec } from "./tools/registry";
 import type { WorkflowStep } from "./types";
 
 /** Raised when the broker refuses. Carries the decision for the caller's trace. */
@@ -91,7 +91,7 @@ export interface BrokeredResult {
    *
    * Carried through rather than reduced to a count: the run trace shows each
    * call and its result, and that is how an operator tells a measured answer
-   * from a plausible one. Only the Databricks tool path produces them.
+   * from a plausible one. Only the tool paths (Databricks, Bedrock) produce them.
    */
   toolCalls?: ToolCallRecord[];
   toolCallCount: number;
@@ -131,9 +131,16 @@ export async function invokeStep(
   let totalTokens = 0;
   let notes: string[] = [];
   let toolCalls: ToolCallRecord[] | undefined;
+  // Per-caller tools (graph_query) authorize as this principal.
+  const toolCtx: ToolContext = {
+    personaId: ctx.personaId,
+    tenantId: ctx.tenantId,
+    origin: ctx.origin,
+    ...(ctx.agentId ? { agentId: ctx.agentId } : {}),
+  };
 
   if (executor === "databricks" && tools.length > 0) {
-    const r = await runStepOnDatabricksWithTools(step, task, prior, tools);
+    const r = await runStepOnDatabricksWithTools(step, task, prior, tools, toolCtx);
     output = r.output ?? "";
     toolCalls = r.toolCalls;
     toolCallCount = r.toolCalls?.length ?? 0;
@@ -144,9 +151,16 @@ export async function invokeStep(
     output = r.output ?? "";
     totalTokens = r.usage?.totalTokens ?? 0;
     notes = r.notes ?? [];
+  } else if (tools.length > 0) {
+    const r = await runStepOnBedrockWithTools(step, task, prior, tools, toolCtx);
+    output = r.output ?? "";
+    toolCalls = r.toolCalls;
+    toolCallCount = r.toolCalls.length;
+    totalTokens = r.usage?.totalTokens ?? 0;
+    notes = r.notes;
   } else {
-    // RunStepResult (Bedrock) carries no `notes` — only the Databricks path
-    // reports them. Narrowed per branch rather than widened with a cast.
+    // RunStepResult (Bedrock) carries no `notes` — only the tool paths report
+    // them. Narrowed per branch rather than widened with a cast.
     const r = await runStepOnBedrock(step, task, prior);
     output = r.output ?? "";
     totalTokens = r.usage?.totalTokens ?? 0;

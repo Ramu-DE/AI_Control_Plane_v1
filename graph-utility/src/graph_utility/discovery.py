@@ -122,8 +122,13 @@ class JoinMetadata:
     right_table: str
     right_columns: tuple[str, ...]
     cardinality: str = "many-to-one"      # one-to-one|one-to-many|many-to-one|many-to-many
-    origin: str = "declared"              # declared|discovered|proposed
+    origin: str = "declared"              # declared|discovered|proposed|value
     name: Optional[str] = None
+    # Set when the join's right side is a VALUE ENTITY (an ontology class
+    # minted from a column's distinct values) rather than a keyed table:
+    # `left_columns` is the referencing column and the object IRI is minted
+    # from its value. None for every ordinary table-to-table join.
+    value_class: Optional[str] = None
 
     def __post_init__(self) -> None:
         if len(self.left_columns) != len(self.right_columns):

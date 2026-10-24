@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { authorizeTransition } from "@/lib/approvals";
 import { store, newId, logAudit } from "@/lib/store";
 import {
   RegistryValidationError,
@@ -197,7 +198,14 @@ const TRANSITIONS: Record<RecordStatus, RecordStatus[]> = {
 };
 
 export async function PATCH(req: NextRequest) {
-  const body = (await req.json()) as { id: string; status: RecordStatus };
+  const body = (await req.json()) as {
+    id: string;
+    status: RecordStatus;
+    /** Who is making this transition: submitter for → Pending, reviewer for decisions. */
+    personaId?: string;
+    reviewerPersonaId?: string;
+    submitterPersonaId?: string;
+  };
   const record = store.records.find((r) => r.id === body.id);
   if (!record) {
     return NextResponse.json({ error: "record not found" }, { status: 404 });
@@ -213,13 +221,36 @@ export async function PATCH(req: NextRequest) {
       { status: 400 }
     );
   }
+  // Maker-checker: see lib/approvals.ts.
+  const who = authorizeTransition({
+    next: body.status,
+    tenantId: record.tenantId,
+    resourceId: record.id,
+    submittedByPersonaId: record.submittedByPersonaId,
+    personaId: body.reviewerPersonaId ?? body.submitterPersonaId ?? body.personaId,
+  });
+  if (!who.ok) {
+    logAudit({ category: "registry", action: "update-status-denied",
+      actor: body.reviewerPersonaId ?? body.submitterPersonaId ?? body.personaId ?? "anonymous",
+      ...(record.tenantId ? { tenantId: record.tenantId } : {}),
+      detail: `DENY '${record.name}': ${record.status} → ${body.status}: ${who.error}` });
+    return NextResponse.json({ error: who.error, code: who.code }, { status: who.status });
+  }
   const from = record.status;
   record.status = body.status;
+  if (who.role === "submit" && who.persona) record.submittedByPersonaId = who.persona.id;
+  if (who.role === "decide" && who.persona) {
+    record.decidedBy = who.persona.name;
+    record.decidedByPersonaId = who.persona.id;
+    record.decidedAt = new Date().toISOString();
+  }
   logAudit({
     category: "registry",
     action: "update-status",
-    actor: "workshop-administrator",
-    detail: `Record '${record.name}': ${from} → ${body.status}`,
+    actor: who.persona?.name ?? "console-user",
+    ...(record.tenantId ? { tenantId: record.tenantId } : {}),
+    detail: `Record '${record.name}': ${from} → ${body.status}` +
+      (who.persona ? ` by ${who.persona.name} (${who.persona.id})` : ""),
   });
   return NextResponse.json(record);
 }

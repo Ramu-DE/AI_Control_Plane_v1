@@ -324,22 +324,28 @@ still probed.
   silently — is pure and tested for exact parity with the file reader. The
   SPARQL round trip itself has never run against a cluster.
 - **Composite key discovery probes PAIRS only.** A three-column natural key is
-  not found, and nor is a composite key whose columns are not key-shaped.
+  not found, and nor is a composite key whose columns are not key-shaped,
+  unless the ontology declares it with `owl:hasKey`. A declared key of any
+  width is resolved to columns and adopted only after measurement confirms it.
 - **A measured key expires.** Uniqueness is a point-in-time measurement, so it
   is re-measured every build rather than cached. A Unity Catalog *declared* key
   is no stronger — UC constraints are informational and unenforced — which is
   why `materialize.py` now detects conflation on both paths.
-- **Matching is otherwise lexical.** Jaccard token overlap plus declared and
-  measured keys, measured containment and `rdfs:domain`. No `skos:altLabel`,
-  embedding or LLM-assisted alignment, and no stemming — so an ontology class
-  `Supplier` will not match a table named `suppliers`. An ontology whose terms
-  differ from the dataset's vocabulary defers most proposals to a human: the
-  right failure direction, but a limit.
+- **Matching is otherwise lexical.** Jaccard token overlap with plural folding,
+  plus ontology synonyms (`skos:prefLabel/altLabel/hiddenLabel` as
+  `label-exact` evidence, trusted per approval profile; see
+  `TAKEDA_BU_KG_DESIGN.md`), declared and measured keys, measured containment
+  and `rdfs:domain`. There is still no embedding or LLM-assisted alignment and
+  no column-comment evidence, so an ontology whose vocabulary differs from the
+  dataset's *and* carries no synonyms still defers to a human.
 - **`planner.SqlCompiler` still double-quotes identifiers**, so the *query*
   path would fail on Databricks for the same reason the materialiser did.
   Related: `SemanticPlanner._guard_fanout` only triggers on a `many-to-many`
   cardinality that nothing in the codebase ever emits, so it is effectively
   dead. Both unfixed; `materialize.SqlDialect` shows the shape of the first fix.
-- **The Neptune load step is still unexecuted.** No cluster exists in this
-  account; `drop_graph_sparql` and the loader invocation are emitted but have
-  not been run against a live endpoint.
+- **The Neptune load step has now run** (2026-10-24, engine 1.4.8, workshop
+  account). The bulk loader ingested three builds with 0 errors, quad counts
+  per named graph match the artifacts, and `drop_graph_sparql` removed a
+  throwaway build's graphs while leaving the others intact. Use
+  `build_graph_live.py --neptune` (`neptune_load.py`). Reading the *ontology*
+  from Neptune (`NeptuneOntologyClient`) is still unverified.

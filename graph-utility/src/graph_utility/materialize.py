@@ -227,6 +227,19 @@ def mint_subject_iri(base_uri: str, table: str, key_values: Iterable[Any]) -> st
     return f"{base_uri}{iri_segment(table)}/" + "/".join(parts)
 
 
+def mint_value_iri(base_uri: str, class_uri: str, value: Any) -> str:
+    """IRI for a VALUE entity: scoped by CLASS, not by table.
+
+    That scoping is the whole point: `sku = 'P-1'` on orders and on inventory
+    is one Product, so both tables must mint the same IRI. The value is used
+    as-is — no case folding or trimming — because deciding that 'Atlanta' and
+    'atlanta ' are the same place is a data-quality judgement, not this
+    function's to make.
+    """
+    local = class_uri.rsplit("#", 1)[-1].rstrip("/").rsplit("/", 1)[-1]
+    return f"{base_uri}value/{iri_segment(local)}/{iri_segment(value)}"
+
+
 # --------------------------------------------------------------------------- #
 # Result
 # --------------------------------------------------------------------------- #
@@ -578,6 +591,39 @@ def materialize_graph(
         result.class_instances += len(seen_subjects)
         result.per_table[table] = emitted_here
 
+    # ---- value entities ---- #
+    # One typed node per DISTINCT value, unioned across every table whose
+    # column was approved for the class. Repeats are expected (many orders,
+    # one product), so they are not conflation.
+    value_seen: dict[str, set[str]] = {}
+    for m in sorted(
+        (m for m in published.mappings
+         if m.kind == ProposalKind.VALUE_CLASS.value and m.target_table and m.target_column),
+        key=lambda m: (m.ontology_uri, m.target_table or "", m.target_column or ""),
+    ):
+        sql = _select_sql(
+            m.target_table, [m.target_column], qualifier=table_qualifier, dialect=dialect,
+            limit=(max_rows_per_table + 1) if max_rows_per_table else None,
+            order_by=_key_aliases("c", 1) if max_rows_per_table else None,
+        )
+        rows = adapter.execute(sql, {}).rows
+        if max_rows_per_table is not None and len(rows) > max_rows_per_table:
+            rows = rows[:max_rows_per_table]
+            result.truncated.append(f"{m.target_table}.{m.target_column}")
+        seen = value_seen.setdefault(m.ontology_uri, set())
+        for row in rows:
+            result.rows_read += 1
+            value = row.get("c0")
+            if value is None or str(value) == "":
+                result.rows_skipped_null_key += 1
+                continue
+            iri = mint_value_iri(base_uri, m.ontology_uri, value)
+            if iri not in seen:
+                seen.add(iri)
+                triples.add((iri, RDF_TYPE, obj_iri(m.ontology_uri)))
+        result.per_table[f"{m.target_table}.{m.target_column}"] = len(rows)
+    result.class_instances += sum(len(s) for s in value_seen.values())
+
     # ---- relationships ---- #
     for m in sorted(
         (m for m in published.mappings
@@ -586,6 +632,40 @@ def materialize_graph(
     ):
         join = m.join or {}
         left_table, right_table = join["left_table"], join["right_table"]
+
+        if join.get("value_class"):
+            # Edge to a value entity: the referencing row's subject, to the
+            # IRI minted from its own column value. No join is executed.
+            if left_table not in subject_keys:
+                msg = (f"relationship '{m.ontology_label}' needs subject IRIs for "
+                       f"'{left_table}', but no keyed CLASS mapping is published for it")
+                if strict:
+                    raise MaterializationError(msg)
+                result.skipped.append({"relationship": m.ontology_uri,
+                                       "code": "no-published-class-key", "message": msg})
+                continue
+            keys = subject_keys[left_table]
+            ref = join["left_columns"][0]
+            sql = _select_sql(
+                left_table, list(keys) + [ref], qualifier=table_qualifier, dialect=dialect,
+                limit=(max_rows_per_table + 1) if max_rows_per_table else None,
+                order_by=_key_aliases("c", len(keys)) if max_rows_per_table else None,
+            )
+            rows = adapter.execute(sql, {}).rows
+            if max_rows_per_table is not None and len(rows) > max_rows_per_table:
+                rows = rows[:max_rows_per_table]
+                result.truncated.append(f"{left_table}->{join['value_class']}")
+            for row in rows:
+                result.rows_read += 1
+                kv = [row.get(f"c{i}") for i in range(len(keys))]
+                value = row.get(f"c{len(keys)}")
+                if any(v is None or str(v) == "" for v in [*kv, value]):
+                    result.rows_skipped_null_key += 1
+                    continue
+                triples.add((mint_subject_iri(base_uri, left_table, kv), m.ontology_uri,
+                             obj_iri(mint_value_iri(base_uri, join["value_class"], value))))
+                result.relationship_triples += 1
+            continue
         left_cols = list(join["left_columns"])
         right_cols = list(join["right_columns"])
 

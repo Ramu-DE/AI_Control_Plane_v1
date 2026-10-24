@@ -19,6 +19,8 @@ serving = ["mlflow>=2.12.0", "pandas>=2.0.0"]
 # `materialize.py` writes N-Quads by hand precisely so emitting a graph does
 # not depend on this.
 ontology = ["rdflib>=7.0"]
+# Loading a build into Neo4j (`neo4j_load.py`). Parsing the N-Quads uses rdflib.
+neo4j = ["neo4j>=5.20", "rdflib>=7.0"]
 # pyspark + databricks-vectorsearch are provided by the Databricks runtime.
 
 [tool.setuptools.packages.find]

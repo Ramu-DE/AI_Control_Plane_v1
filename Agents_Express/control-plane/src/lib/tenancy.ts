@@ -430,3 +430,81 @@ export function tenantsInTreeOrder<T extends { id: string; parentId: string | nu
   }
   return out;
 }
+
+// --------------------------------------------------------------------------- //
+// Regulatory attributes (GxP, data residency) — inherited down the tree
+// --------------------------------------------------------------------------- //
+
+/**
+ * The attributes a policy sees for the tenant a request acts in, as strings
+ * (`resource.gxp`, `resource.region`, `resource.regionBound`). Each is taken
+ * from the NEAREST tenant on the chain that sets it, so a BU marked GxP makes
+ * every sub-unit GxP unless one explicitly says otherwise.
+ */
+export function tenantPolicyAttributes(
+  tenantId: string | undefined,
+  tenants: Tenant[]
+): Record<string, string> {
+  if (!tenantId) return {};
+  const byId = new Map(tenants.map((t) => [t.id, t]));
+  let gxp: boolean | undefined;
+  let region: string | undefined;
+  for (const id of tenantChain(tenantId, tenants)) {
+    const t = byId.get(id);
+    if (gxp === undefined && t?.gxp !== undefined) gxp = t.gxp;
+    if (region === undefined && t?.dataRegion) region = t.dataRegion;
+  }
+  return {
+    tenant: tenantId,
+    gxp: String(Boolean(gxp)),
+    region: region ?? "",
+    regionBound: String(Boolean(region)),
+  };
+}
+
+/** Regulatory defaults for the seeded Takeda tree. Illustrative, for review. */
+export const TAKEDA_REGULATORY: Record<string, Pick<Tenant, "gxp" | "dataRegion">> = {
+  "fn-rnd": { gxp: true },
+  "fn-medical": { gxp: true },
+  "fn-supply": { gxp: true },
+  "bu-plasma": { gxp: true },
+  "bu-japan": { dataRegion: "JP" },
+  "bu-onc-japan": { dataRegion: "JP" },
+  "bu-onc-eucan": { dataRegion: "EU" },
+  "bu-us": { dataRegion: "US" },
+  "bu-onc-us": { dataRegion: "US" },
+};
+
+/** Apply the defaults to tenants that have not set them. Returns what changed. */
+export function upgradeTenantRegulatory(tenants: Tenant[]): string[] {
+  const changes: string[] = [];
+  for (const t of tenants) {
+    const d = TAKEDA_REGULATORY[t.id];
+    if (!d) continue;
+    if (d.gxp !== undefined && t.gxp === undefined) {
+      t.gxp = d.gxp;
+      changes.push(`${t.id} gxp`);
+    }
+    if (d.dataRegion && t.dataRegion === undefined) {
+      t.dataRegion = d.dataRegion;
+      changes.push(`${t.id} region=${d.dataRegion}`);
+    }
+  }
+  return changes;
+}
+
+/** Effective GxP / region for a tenant AND which tenant each comes from. */
+export function tenantRegulatory(
+  tenantId: string,
+  tenants: Tenant[]
+): { gxp: { value: boolean; from: string | null }; region: { value: string | null; from: string | null } } {
+  const byId = new Map(tenants.map((t) => [t.id, t]));
+  let gxp: { value: boolean; from: string | null } | null = null;
+  let region: { value: string | null; from: string | null } | null = null;
+  for (const id of tenantChain(tenantId, tenants)) {
+    const t = byId.get(id);
+    if (!gxp && t?.gxp !== undefined) gxp = { value: t.gxp, from: id };
+    if (!region && t?.dataRegion) region = { value: t.dataRegion, from: id };
+  }
+  return { gxp: gxp ?? { value: false, from: null }, region: region ?? { value: null, from: null } };
+}

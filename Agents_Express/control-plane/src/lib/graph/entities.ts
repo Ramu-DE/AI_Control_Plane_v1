@@ -118,11 +118,28 @@ export interface Neo4jBackend {
 }
 
 /**
+ * An RDF graph in Amazon Neptune, queried with SPARQL. A source owns specific
+ * NAMED GRAPHS (one graph-utility build is `urn:kg:build:<id>` plus
+ * `:inferred`), and every query is scoped to exactly those graphs — Neptune's
+ * default graph is the union of all graphs, so scoping is what keeps one
+ * source from reading another. Neptune is VPC-only; the endpoint is reached
+ * from inside the VPC with no credential (security-group boundary).
+ */
+export interface NeptuneBackend {
+  type: "neptune";
+  /** https://<cluster-endpoint>:8182 */
+  endpoint: string;
+  /** The named graphs this source may read. Required and non-empty. */
+  namedGraphs: string[];
+}
+
+/**
  * The persisted backend. A discriminated union keyed on `type`:
  *   - databricks-uc : ontology→UC mapping resolved by an external serving URL
  *   - neo4j         : native Cypher executed directly over Bolt
+ *   - neptune       : SPARQL over the source's own named graphs
  */
-export type GraphSourceBackend = DatabricksUcBackend | Neo4jBackend;
+export type GraphSourceBackend = DatabricksUcBackend | Neo4jBackend | NeptuneBackend;
 
 /**
  * The persisted GraphSource entity. A superset of the legacy GraphSourceRecord
@@ -156,6 +173,13 @@ export interface GraphSource {
   allowedHosts?: string[];
   /** Optimistic-concurrency token; bumped on every write. */
   rev?: number;
+  /** Where this source's knowledge graph COMES FROM. See lib/kg/spec.ts. */
+  kgSpec?: KgSpec;
+  /** Maker-checker trail: who submitted it, and who decided (approve/reject/deprecate). */
+  submittedByPersonaId?: string;
+  decidedBy?: string;
+  decidedByPersonaId?: string;
+  decidedAt?: ISO;
 }
 
 // --------------------------------------------------------------------------- //
@@ -413,3 +437,27 @@ export class NotFoundError extends Error {
     this.name = "NotFoundError";
   }
 }
+
+// --------------------------------------------------------------------------- //
+// KgSpec — how a Graph Source's knowledge graph is produced
+// --------------------------------------------------------------------------- //
+
+/** The dataset an ontology-first build reads. */
+export type KgDataset =
+  | { kind: "uc"; catalog: string; schema: string; tableFilter?: string }
+  | { kind: "csv"; dir: string };
+
+export type KgSpec =
+  /** The graph database already holds the data (loaded by its own pipeline). Explore only. */
+  | { mode: "native"; labels: string[] }
+  /** graph-utility builds it from an ontology over a dataset, under an approval profile. */
+  | {
+      mode: "ontology-first";
+      /** Path under graph-utility/ontologies/ (e.g. takeda/rnd-clinical.ttl). */
+      ontology: string;
+      namespace: string;
+      dataset: KgDataset;
+      approvalProfile: "gxp-strict" | "standard" | "exploratory";
+    }
+  /** Legacy demo: derive an ontology FROM Unity Catalog metadata. */
+  | { mode: "derived"; catalog: string; schema: string; tableFilter?: string };

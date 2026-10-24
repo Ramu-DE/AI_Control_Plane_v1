@@ -1,0 +1,96 @@
+# R&D clinical spoke ontology — illustrative, for the Takeda BU/BF pattern
+# described in docs/TAKEDA_BU_KG_DESIGN.md §3.
+#
+# Terms are ENTERPRISE vocabulary (ClinicalStudy, StudySite,
+# PrincipalInvestigator), which is what a shared core ontology uses and what a
+# BU's tables usually do not. The BU's own vocabulary is recorded as
+# skos:altLabel: curated, versioned, reviewable evidence that lets the build
+# map terms onto `trial`, `site`, `investigator` without anyone hand-writing a
+# mapping. Nothing here names a table or a column as such.
+#
+# Namespace is a placeholder; a real core would be published by the ontology
+# owners with stable IRIs, and spokes would owl:imports it.
+
+@prefix tk:   <http://example.org/takeda/rnd#> .
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+
+<http://example.org/takeda/rnd> a owl:Ontology ;
+    rdfs:label "Takeda R&D clinical (spoke)" ;
+    owl:versionInfo "0.1.0" .
+
+# --- classes --------------------------------------------------------------- #
+tk:Study a owl:Class ;
+    rdfs:label "Study" ;
+    rdfs:comment "Any research study (core concept)." .
+
+tk:ClinicalStudy a owl:Class ;
+    rdfs:subClassOf tk:Study ;
+    rdfs:label "Clinical Study" ;
+    skos:altLabel "Trial" ;
+    rdfs:comment "An interventional or observational clinical study." .
+
+tk:StudySite a owl:Class ;
+    rdfs:label "Study Site" ;
+    skos:altLabel "Site" .
+
+tk:PrincipalInvestigator a owl:Class ;
+    rdfs:label "Principal Investigator" ;
+    skos:altLabel "Investigator" .
+
+tk:SiteAssignment a owl:Class ;
+    rdfs:label "Site Assignment" ;
+    skos:altLabel "Trial Site" ;
+    rdfs:comment "One study running at one site under one investigator." .
+
+# --- datatype properties ---------------------------------------------------- #
+tk:studyTitle a owl:DatatypeProperty ;
+    rdfs:label "studyTitle" ; skos:altLabel "trial_title" ;
+    rdfs:domain tk:ClinicalStudy ; rdfs:range xsd:string .
+
+tk:studyPhase a owl:DatatypeProperty ;
+    rdfs:label "studyPhase" ; skos:altLabel "phase" ;
+    rdfs:domain tk:ClinicalStudy ; rdfs:range xsd:string .
+
+tk:plannedEnrollment a owl:DatatypeProperty ;
+    rdfs:label "plannedEnrollment" ; skos:altLabel "enrollment_target" ;
+    rdfs:domain tk:ClinicalStudy ; rdfs:range xsd:integer .
+
+tk:siteName a owl:DatatypeProperty ;
+    rdfs:label "siteName" ;
+    rdfs:domain tk:StudySite ; rdfs:range xsd:string .
+
+tk:country a owl:DatatypeProperty ;
+    rdfs:label "country" ;
+    rdfs:domain tk:StudySite ; rdfs:range xsd:string .
+
+tk:investigatorName a owl:DatatypeProperty ;
+    rdfs:label "investigatorName" ;
+    rdfs:domain tk:PrincipalInvestigator ; rdfs:range xsd:string .
+
+tk:therapeuticSpecialty a owl:DatatypeProperty ;
+    rdfs:label "therapeuticSpecialty" ; skos:altLabel "specialty" ;
+    rdfs:domain tk:PrincipalInvestigator ; rdfs:range xsd:string .
+
+tk:enrolledCount a owl:DatatypeProperty ;
+    rdfs:label "enrolledCount" ;
+    rdfs:domain tk:SiteAssignment ; rdfs:range xsd:integer .
+
+# --- relationships ---------------------------------------------------------- #
+tk:forStudy a owl:ObjectProperty ;
+    rdfs:label "forStudy" ;
+    rdfs:domain tk:SiteAssignment ; rdfs:range tk:ClinicalStudy .
+
+tk:atSite a owl:ObjectProperty ;
+    rdfs:label "atSite" ;
+    rdfs:domain tk:SiteAssignment ; rdfs:range tk:StudySite .
+
+tk:ledBy a owl:ObjectProperty ;
+    rdfs:label "ledBy" ;
+    rdfs:domain tk:SiteAssignment ; rdfs:range tk:PrincipalInvestigator .
+
+tk:hostsAssignment a owl:ObjectProperty ;
+    rdfs:label "hostsAssignment" ;
+    owl:inverseOf tk:atSite .

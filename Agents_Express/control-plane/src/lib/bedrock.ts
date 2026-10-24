@@ -7,7 +7,10 @@ import {
   BedrockRuntimeClient,
   ConverseCommand,
 } from "@aws-sdk/client-bedrock-runtime";
+import type { ContentBlock, Message, Tool } from "@aws-sdk/client-bedrock-runtime";
 import { store } from "./store";
+import { executeToolCall } from "./tools/registry";
+import type { ToolCallRecord, ToolContext, ToolSpec } from "./tools/registry";
 // Type-only import — see the note in store.ts (keeps the module loadable by
 // Node's strip-only TypeScript loader used by `npm test`).
 import type { StepRun, TokenUsage, WorkflowStep } from "./types";
@@ -128,6 +131,162 @@ export async function runStepOnBedrock(
   };
   const costUsd = estimateCost(resolvedModelId, usage);
   return { output, usage, latencyMs, costUsd, resolvedModelId };
+}
+
+const MAX_TOOL_ITERATIONS = 6;
+const MAX_TOOL_RESULT_CHARS = 8_000;
+
+export interface BedrockToolStepResult extends RunStepResult {
+  toolCalls: ToolCallRecord[];
+  notes: string[];
+}
+
+/** Render ToolSpecs as Converse `toolConfig.tools`. Pure. */
+export function toConverseTools(specs: ToolSpec[]): Tool[] {
+  return specs.map((s) => ({
+    toolSpec: {
+      name: s.name,
+      description: s.description,
+      inputSchema: { json: s.parameters as unknown as Record<string, never> },
+    },
+  }));
+}
+
+function addUsage(a: TokenUsage, u: { inputTokens?: number; outputTokens?: number; totalTokens?: number } | undefined): TokenUsage {
+  return {
+    inputTokens: a.inputTokens + (u?.inputTokens ?? 0),
+    outputTokens: a.outputTokens + (u?.outputTokens ?? 0),
+    totalTokens: a.totalTokens + (u?.totalTokens ?? 0),
+  };
+}
+
+function textOf(content: ContentBlock[] | undefined): string {
+  return (content ?? []).map((c) => ("text" in c && c.text) || "").join("");
+}
+
+/**
+ * Execute one workflow step on Bedrock WITH tool calling (Converse toolUse).
+ *
+ * Mirrors the Databricks loop: the model may request approved tools, each call
+ * runs through executeToolCall with the caller context (so per-caller tools
+ * like graph_query authorize as this agent/persona/tenant), results go back as
+ * toolResult blocks, and the loop is bounded. If the bound is hit after tools
+ * ran, one final turn asks for an answer from the results already gathered.
+ */
+export async function runStepOnBedrockWithTools(
+  step: WorkflowStep,
+  task: string,
+  priorOutputs: { name: string; output: string }[],
+  tools: ToolSpec[],
+  ctx: ToolContext
+): Promise<BedrockToolStepResult> {
+  const catalog = store.models.find((m) => m.id === step.modelId);
+  const resolvedModelId = toInferenceProfileId(catalog?.modelId ?? "");
+
+  const context =
+    priorOutputs.length > 0
+      ? "Findings already established by earlier steps of this workflow:\n" +
+        priorOutputs.map((p) => `### ${p.name}\n${p.output}`).join("\n\n") +
+        "\n\n"
+      : "";
+  const userText =
+    `Overall task:\n${task}\n\n` +
+    context +
+    `You are the "${step.name}" agent. ${step.prompt}\n\n` +
+    `You have tools. Use them to get facts instead of guessing, then answer. ` +
+    `Report only what the tool results and the provided context support.`;
+
+  const messages: Message[] = [{ role: "user", content: [{ text: userText }] }];
+  const toolConfig = { tools: toConverseTools(tools) };
+  const toolCalls: ToolCallRecord[] = [];
+  const notes: string[] = [];
+  let usage: TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+  let output = "";
+  const started = Date.now();
+
+  for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
+    const res = await client().send(
+      new ConverseCommand({
+        modelId: resolvedModelId,
+        messages,
+        toolConfig,
+        inferenceConfig: { maxTokens: 1500, temperature: 0.2 },
+      })
+    );
+    usage = addUsage(usage, res.usage);
+    const message = res.output?.message;
+    const content = message?.content ?? [];
+    const requested = content.filter((c) => "toolUse" in c && c.toolUse);
+
+    if (res.stopReason !== "tool_use" || requested.length === 0) {
+      output = textOf(content);
+      break;
+    }
+
+    // The assistant turn must be echoed before its tool results.
+    messages.push({ role: "assistant", content });
+    const results: ContentBlock[] = [];
+    for (const block of requested) {
+      const use = (block as ContentBlock.ToolUseMember).toolUse;
+      const args = (use.input ?? {}) as Record<string, unknown>;
+      const { record, payload } = await executeToolCall(use.name ?? "", args, ctx, tools);
+      toolCalls.push(record);
+      results.push({
+        toolResult: {
+          toolUseId: use.toolUseId,
+          content: [{ text: JSON.stringify(payload).slice(0, MAX_TOOL_RESULT_CHARS) }],
+          status: record.ok ? "success" : "error",
+        },
+      });
+    }
+    messages.push({ role: "user", content: results });
+
+    if (iteration === MAX_TOOL_ITERATIONS - 1) {
+      notes.push(`tool loop hit its ${MAX_TOOL_ITERATIONS}-iteration bound`);
+    }
+  }
+
+  if (!output && toolCalls.length > 0) {
+    notes.push("forcing a final answer from the tool results already gathered");
+    messages.push({
+      role: "user",
+      content: [
+        {
+          text:
+            "Answer now, using only the tool results above. Do not request another tool. " +
+            "If something you wanted is missing, say which part is unverified.",
+        },
+      ],
+    });
+    const res = await client().send(
+      new ConverseCommand({
+        modelId: resolvedModelId,
+        messages,
+        toolConfig,
+        inferenceConfig: { maxTokens: 1500, temperature: 0.2 },
+      })
+    );
+    usage = addUsage(usage, res.usage);
+    output = textOf(res.output?.message?.content);
+  }
+
+  if (!output) notes.push("model returned no assistant text");
+  if (toolCalls.length > 0) {
+    notes.push(
+      `${toolCalls.length} tool call(s) executed: ` +
+        toolCalls.map((c) => `${c.name}${c.ok ? "" : " (failed)"}`).join(", ")
+    );
+  }
+
+  return {
+    output,
+    usage,
+    latencyMs: Date.now() - started,
+    costUsd: estimateCost(resolvedModelId, usage),
+    resolvedModelId,
+    toolCalls,
+    notes,
+  };
 }
 
 // Build a fresh StepRun stub from a step definition.

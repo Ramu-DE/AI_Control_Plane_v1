@@ -11,6 +11,7 @@
 
 import { UcToolError, ucDescribeTable, ucListTables, ucQuery } from "./uc";
 import { deriveOntology, deriveProposals } from "../kg/derive";
+import { queryGraphAsAgent } from "../graph/query";
 
 /** JSON-Schema-shaped parameter spec, as the model APIs expect. */
 export interface ToolParameters {
@@ -19,13 +20,46 @@ export interface ToolParameters {
   required?: string[];
 }
 
+/**
+ * Who a tool call runs for. UC tools ignore it (the platform credential is
+ * shared and bounded by DATABRICKS_UC_ALLOWED_SCOPES); tools that authorize per
+ * caller — graph_query — refuse to run without it.
+ */
+export interface ToolContext {
+  personaId: string;
+  tenantId: string;
+  agentId?: string;
+  origin: string;
+}
+
 export interface ToolSpec {
   name: string;
   description: string;
   parameters: ToolParameters;
   /** Execute the tool. Returns a JSON-serializable result. */
-  execute: (args: Record<string, unknown>) => Promise<unknown>;
+  execute: (args: Record<string, unknown>, ctx?: ToolContext) => Promise<unknown>;
 }
+
+/** A tool context is only a graph caller when it names an agent. */
+function graphCaller(ctx: ToolContext | undefined) {
+  return ctx && ctx.agentId
+    ? { personaId: ctx.personaId, tenantId: ctx.tenantId, agentId: ctx.agentId, origin: ctx.origin }
+    : undefined;
+}
+
+// Label and relationship-type inventory, so a model writes Cypher against the
+// graph that exists rather than one it imagines.
+const GRAPH_SCHEMA_CYPHER =
+  "MATCH (n) UNWIND labels(n) AS name RETURN 'node' AS kind, name, count(*) AS count " +
+  "UNION ALL " +
+  "MATCH ()-[r]->() RETURN 'relationship' AS kind, type(r) AS name, count(*) AS count";
+// The same inventory for an RDF source: classes and predicates with counts.
+// Scoped to the source's graphs by planSparql, like every SPARQL query.
+const GRAPH_SCHEMA_SPARQL =
+  "SELECT ?kind ?name (COUNT(*) AS ?count) WHERE { " +
+  "{ ?s a ?name BIND('class' AS ?kind) } UNION " +
+  "{ ?s ?name ?o FILTER(?name != <http://www.w3.org/1999/02/22-rdf-syntax-ns#type>) " +
+  "BIND('predicate' AS ?kind) } } GROUP BY ?kind ?name ORDER BY ?kind ?name";
 
 function str(args: Record<string, unknown>, key: string): string {
   const v = args[key];
@@ -130,6 +164,81 @@ export const TOOL_IMPLEMENTATIONS: Record<string, ToolSpec> = {
     },
     execute: (args) => ucQuery(str(args, "sql")),
   },
+  graph_schema: {
+    name: "graph_schema",
+    description:
+      "List what an approved Graph Source contains: node labels and relationship types " +
+      "(Neo4j) or classes and predicates with full IRIs (Neptune), with counts. Call this " +
+      "first so queries use real names.",
+    parameters: {
+      type: "object",
+      properties: {
+        graph_source_id: { type: "string", description: "Graph Source id, e.g. biomedical" },
+      },
+      required: ["graph_source_id"],
+    },
+    execute: (args, ctx) =>
+      queryGraphAsAgent(
+        {
+          graphSourceId: str(args, "graph_source_id"),
+          cypher: GRAPH_SCHEMA_CYPHER,
+          sparql: GRAPH_SCHEMA_SPARQL,
+          limit: 100,
+        },
+        graphCaller(ctx)
+      ),
+  },
+  graph_sparql: {
+    name: "graph_sparql",
+    description:
+      "Run ONE read-only SPARQL SELECT or ASK against an approved Neptune (RDF) Graph Source " +
+      "and return the bindings. The query is automatically scoped to that source's graphs, so " +
+      "do not use FROM, GRAPH or SERVICE; updates are rejected. Use full IRIs or PREFIX " +
+      "declarations from graph_schema. Access is checked for this agent, persona and tenant.",
+    parameters: {
+      type: "object",
+      properties: {
+        graph_source_id: { type: "string", description: "Graph Source id, e.g. scm-kg-rdf" },
+        sparql: { type: "string", description: "A single SPARQL SELECT or ASK query" },
+        limit: { type: "number", description: "Maximum rows (1-100, default 25)" },
+      },
+      required: ["graph_source_id", "sparql"],
+    },
+    execute: (args, ctx) =>
+      queryGraphAsAgent(
+        {
+          graphSourceId: str(args, "graph_source_id"),
+          sparql: str(args, "sparql"),
+          ...(typeof args.limit === "number" ? { limit: args.limit } : {}),
+        },
+        graphCaller(ctx)
+      ),
+  },
+  graph_query: {
+    name: "graph_query",
+    description:
+      "Run ONE read-only Cypher query (MATCH/RETURN; use $limit for LIMIT) against an approved " +
+      "Neo4j Graph Source and return the rows. Writes, procedures that modify data and admin " +
+      "commands are rejected. Access is checked for this agent, persona and tenant.",
+    parameters: {
+      type: "object",
+      properties: {
+        graph_source_id: { type: "string", description: "Graph Source id, e.g. biomedical" },
+        cypher: { type: "string", description: "A single read-only Cypher statement" },
+        limit: { type: "number", description: "Maximum rows (1-100, default 25)" },
+      },
+      required: ["graph_source_id", "cypher"],
+    },
+    execute: (args, ctx) =>
+      queryGraphAsAgent(
+        {
+          graphSourceId: str(args, "graph_source_id"),
+          cypher: str(args, "cypher"),
+          ...(typeof args.limit === "number" ? { limit: args.limit } : {}),
+        },
+        graphCaller(ctx)
+      ),
+  },
 };
 
 export function isImplemented(name: string): boolean {
@@ -186,12 +295,21 @@ const PREVIEW_CHARS = 600;
  */
 export async function executeToolCall(
   name: string,
-  args: Record<string, unknown>
+  args: Record<string, unknown>,
+  ctx?: ToolContext,
+  offered?: ToolSpec[]
 ): Promise<{ record: ToolCallRecord; payload: unknown }> {
   const started = Date.now();
-  const spec = TOOL_IMPLEMENTATIONS[name];
+  // A model can name any tool, not just the ones it was offered. Without this
+  // check an implemented-but-unapproved tool would run because it exists.
+  const notOffered = offered !== undefined && !offered.some((t) => t.name === name);
+  const spec = notOffered ? undefined : TOOL_IMPLEMENTATIONS[name];
   if (!spec) {
-    const payload = { error: `tool '${name}' is not implemented by this platform` };
+    const payload = {
+      error: notOffered
+        ? `tool '${name}' was not offered to this step`
+        : `tool '${name}' is not implemented by this platform`,
+    };
     return {
       record: {
         name,
@@ -204,7 +322,7 @@ export async function executeToolCall(
     };
   }
   try {
-    const payload = await spec.execute(args);
+    const payload = await spec.execute(args, ctx);
     const json = JSON.stringify(payload);
     return {
       record: {

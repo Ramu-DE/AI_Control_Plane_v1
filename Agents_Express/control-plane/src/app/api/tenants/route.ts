@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { store, newId, logAudit } from "@/lib/store";
 import { getTierConfig, isolationForTier, planLabel } from "@/lib/tiers";
-import { perAgentLimits, tenantCapacity, tenantUsage } from "@/lib/tenancy";
+import { perAgentLimits, tenantCapacity, tenantRegulatory, tenantUsage } from "@/lib/tenancy";
+import { personaTenantDecision } from "@/lib/personas";
 import { effectiveModelAllowlist } from "@/lib/modelAccess";
 import { Tenant, TenantTier, TierConfig } from "@/lib/types";
 
@@ -32,9 +33,66 @@ export async function GET() {
       // The EFFECTIVE allowlist, after inheritance — what actually governs
       // this tenant, not just what it declares itself.
       modelAccess: effectiveModelAllowlist(t.id, store.tenants),
+      // Effective GxP / residency after inheritance, and where each comes from.
+      regulatory: tenantRegulatory(t.id, store.tenants),
     };
   });
   return NextResponse.json({ tenants: withConfig });
+}
+
+/**
+ * PATCH → set a tenant's regulatory attributes. `null` clears a value so the
+ * tenant inherits from its parent again.
+ *
+ * Changing whether a BU is GxP-regulated, or where its data must stay,
+ * changes who may touch everything in it, so it takes an ADMIN of that tenant
+ * or of a tenant above it — and is audited with who did it.
+ */
+export async function PATCH(req: NextRequest) {
+  const body = (await req.json()) as {
+    id?: string;
+    gxp?: boolean | null;
+    dataRegion?: "US" | "EU" | "JP" | null;
+    personaId?: string;
+  };
+  const tenant = store.tenants.find((t) => t.id === body.id);
+  if (!tenant) return NextResponse.json({ error: "tenant not found" }, { status: 404 });
+  const persona = store.personas.find((p) => p.id === body.personaId);
+  if (!persona) {
+    return NextResponse.json(
+      { error: "personaId is required: a regulatory change must name who made it", code: "ACTOR_REQUIRED" },
+      { status: 400 });
+  }
+  const member = personaTenantDecision(persona, tenant.id, store.tenants);
+  if (!member.allowed || member.role !== "admin") {
+    const why = member.allowed
+      ? `${persona.name} is ${member.role} in '${member.via}'; changing regulatory attributes needs admin`
+      : member.reason;
+    logAudit({ category: "policy", action: "tenant-regulatory-denied", actor: persona.name,
+      tenantId: tenant.id, detail: `DENY regulatory change on '${tenant.id}': ${why}` });
+    return NextResponse.json({ error: why, code: "ACTOR_NOT_PERMITTED" }, { status: 403 });
+  }
+  if (body.dataRegion !== undefined && body.dataRegion !== null &&
+      !["US", "EU", "JP"].includes(body.dataRegion)) {
+    return NextResponse.json({ error: "dataRegion must be US, EU, JP or null" }, { status: 400 });
+  }
+  const before = tenantRegulatory(tenant.id, store.tenants);
+  if (body.gxp !== undefined) {
+    if (body.gxp === null) delete tenant.gxp; else tenant.gxp = Boolean(body.gxp);
+  }
+  if (body.dataRegion !== undefined) {
+    if (body.dataRegion === null) delete tenant.dataRegion; else tenant.dataRegion = body.dataRegion;
+  }
+  tenant.updatedAt = new Date().toISOString();
+  const after = tenantRegulatory(tenant.id, store.tenants);
+  logAudit({
+    category: "policy", action: "tenant-regulatory", actor: persona.name, tenantId: tenant.id,
+    detail:
+      `Regulatory attributes of '${tenant.id}' set by ${persona.name}: ` +
+      `GxP ${before.gxp.value} → ${after.gxp.value}${after.gxp.from && after.gxp.from !== tenant.id ? ` (inherited from ${after.gxp.from})` : ""}, ` +
+      `region ${before.region.value ?? "none"} → ${after.region.value ?? "none"}`,
+  });
+  return NextResponse.json({ ...tenant, regulatory: after });
 }
 
 export async function POST(req: NextRequest) {

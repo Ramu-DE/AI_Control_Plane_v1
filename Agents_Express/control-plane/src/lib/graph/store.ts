@@ -64,7 +64,9 @@ export interface GraphControlStore {
   transitionGraphSource(
     graphSourceId: string,
     next: RecordStatus,
-    expectedRev: number
+    expectedRev: number,
+    /** Decision metadata (submitter / reviewer) written with the transition. */
+    meta?: ApprovalMeta
   ): Promise<GraphSource>;
 
   // ---- BuildRun ----
@@ -94,3 +96,8 @@ export interface GraphControlStore {
   getMappingVersion(mappingVersionId: string): Promise<MappingVersion | null>;
   createMappingVersion(version: MappingVersion): Promise<MappingVersion>;
 }
+
+/** Who moved a governed resource through its lifecycle. */
+export type ApprovalMeta = Partial<
+  Pick<GraphSource, "submittedByPersonaId" | "decidedBy" | "decidedByPersonaId" | "decidedAt">
+>;

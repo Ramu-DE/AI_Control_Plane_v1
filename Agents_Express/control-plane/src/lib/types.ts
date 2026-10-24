@@ -55,6 +55,18 @@ export interface Tenant {
    * `lib/modelAccess.ts`.
    */
   allowedModelIds?: string[];
+  /**
+   * GxP-regulated: data and actions here fall under GxP. Inherited by every
+   * descendant (nearest ancestor that sets it wins). Policy reads it as
+   * `resource.gxp`.
+   */
+  gxp?: boolean;
+  /**
+   * Data residency. Set on a tenant whose data must stay with people in that
+   * region; inherited like `gxp`. Policy reads `resource.region` and
+   * `resource.regionBound`.
+   */
+  dataRegion?: "US" | "EU" | "JP";
   createdAt: string;
   updatedAt: string;
 }
@@ -278,6 +290,11 @@ export interface RegistryRecord {
    */
   tenantId?: ID;
   createdAt: string;
+  /** Maker-checker trail: who submitted it, and who decided (approve/reject/deprecate). */
+  submittedByPersonaId?: ID;
+  decidedBy?: string;
+  decidedByPersonaId?: ID;
+  decidedAt?: string;
 }
 
 // ---------- Part 2: Agents ----------
@@ -481,6 +498,26 @@ export interface Persona {
   groups: string[];
   // Attributes the policy evaluator can reason about (role, approvalLimit, etc.).
   attributes: Record<string, string>;
+  /**
+   * Which tenants this identity may act in, and as what. A membership covers
+   * that tenant AND its descendants (an R&D analyst can act in R&D Research),
+   * never a sibling or a parent. Absent = no tenant at all: every
+   * tenant-scoped decision fails closed. Derived from IdP groups named
+   * `TKD-<TENANT>-<ROLE>` when not given explicitly (lib/personas.ts).
+   */
+  memberships?: TenantMembership[];
+  /** The tenant the identity belongs to in the org chart (display, audit). */
+  homeTenantId?: ID;
+  /** Deactivated: kept for the audit trail, but every authorization fails. */
+  disabled?: boolean;
+}
+
+/** What a persona may do inside a tenant, least to most privileged. */
+export type TenantRole = "viewer" | "analyst" | "approver" | "admin";
+
+export interface TenantMembership {
+  tenantId: ID;
+  role: TenantRole;
 }
 
 // A pre-created Cognito group (seniority level).
@@ -834,6 +871,8 @@ export interface StepRun {
   costUsd: number | null;
   reviewGate: boolean;
   reviewer?: string;
+  /** The persona who took the review decision (approver+ in the run's tenant). */
+  reviewerPersonaId?: ID;
   reviewNote?: string;
   startedAt?: string;
   finishedAt?: string;

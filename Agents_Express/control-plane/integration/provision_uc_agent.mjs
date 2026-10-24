@@ -24,6 +24,12 @@
 
 import assert from "node:assert";
 
+// Maker-checker: a named submitter, and a DIFFERENT approver (lib/approvals.ts).
+const SUBMITTER = process.env.SUBMITTER_PERSONA_ID || "persona-john";
+const REVIEWER = process.env.REVIEWER_PERSONA_ID || "persona-mary";
+const actorFor = (status) =>
+  status === "Pending approval" ? { submitterPersonaId: SUBMITTER } : { reviewerPersonaId: REVIEWER };
+
 const BASE = (process.env.CONTROL_PLANE_URL || "http://localhost:3000/proxy/3000").replace(/\/+$/, "");
 const CATALOG = process.env.UC_CATALOG || "workspace";
 const SCHEMA = process.env.UC_SCHEMA || "default";
@@ -78,7 +84,7 @@ async function api(path, init) {
 
 async function approve(id) {
   for (const status of ["Pending approval", "Approved"]) {
-    await api("/api/registry", { method: "PATCH", body: JSON.stringify({ id, status }) });
+    await api("/api/registry", { method: "PATCH", body: JSON.stringify({ id, status, ...actorFor(status) }) });
   }
 }
 

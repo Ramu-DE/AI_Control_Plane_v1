@@ -1,0 +1,87 @@
+# Supply-chain spoke ontology — illustrative (fn-supply), for the dataset-
+# agnostic test in docs/TAKEDA_BU_KG_DESIGN.md §8.
+#
+# The dataset it is built against (workspace.scm_demo) declares NO keys and is
+# denormalised: products, customers, warehouses and locations have no tables —
+# they exist only as column values. The ontology says what things are and,
+# with owl:hasKey, what identifies them. It never names a table or column;
+# skos:altLabel records the BU's own vocabulary.
+
+@prefix scm:  <http://example.org/takeda/scm#> .
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+
+<http://example.org/takeda/scm> a owl:Ontology ;
+    rdfs:label "Takeda supply chain (spoke)" ; owl:versionInfo "0.1.0" .
+
+# --- classes --------------------------------------------------------------- #
+scm:SalesOrder a owl:Class ; rdfs:label "Sales Order" ; skos:altLabel "Demand Order" .
+scm:Product a owl:Class ; rdfs:label "Product" ; skos:altLabel "SKU" .
+scm:Customer a owl:Class ; rdfs:label "Customer" .
+scm:Warehouse a owl:Class ; rdfs:label "Warehouse" .
+scm:Location a owl:Class ; rdfs:label "Location" ;
+    skos:altLabel "destination", "origin" .
+scm:TransportLane a owl:Class ; rdfs:label "Transport Lane" ; skos:altLabel "Lane" .
+
+scm:InventoryPosition a owl:Class ; rdfs:label "Inventory Position" ;
+    skos:altLabel "Inventory" ;
+    rdfs:comment "Stock of one product at one warehouse." ;
+    owl:hasKey ( scm:forProduct scm:atWarehouse ) .
+
+scm:LanePerformance a owl:Class ; rdfs:label "Lane Performance" ;
+    rdfs:comment "Observed reliability of one lane in one month." ;
+    owl:hasKey ( scm:measuredLane scm:measuredMonth ) .
+
+# --- relationships ---------------------------------------------------------- #
+scm:orderedProduct a owl:ObjectProperty ; rdfs:label "orderedProduct" ;
+    rdfs:domain scm:SalesOrder ; rdfs:range scm:Product .
+scm:placedBy a owl:ObjectProperty ; rdfs:label "placedBy" ;
+    rdfs:domain scm:SalesOrder ; rdfs:range scm:Customer .
+scm:shipTo a owl:ObjectProperty ; rdfs:label "shipTo" ; skos:altLabel "destination" ;
+    rdfs:domain scm:SalesOrder ; rdfs:range scm:Location .
+
+scm:forProduct a owl:ObjectProperty ; rdfs:label "forProduct" ; skos:altLabel "sku" ;
+    rdfs:domain scm:InventoryPosition ; rdfs:range scm:Product .
+scm:atWarehouse a owl:ObjectProperty ; rdfs:label "atWarehouse" ; skos:altLabel "warehouse" ;
+    rdfs:domain scm:InventoryPosition ; rdfs:range scm:Warehouse .
+
+scm:fromLocation a owl:ObjectProperty ; rdfs:label "fromLocation" ; skos:altLabel "origin" ;
+    rdfs:domain scm:TransportLane ; rdfs:range scm:Location .
+scm:toLocation a owl:ObjectProperty ; rdfs:label "toLocation" ; skos:altLabel "destination" ;
+    rdfs:domain scm:TransportLane ; rdfs:range scm:Location .
+
+scm:measuredLane a owl:ObjectProperty ; rdfs:label "measuredLane" ; skos:altLabel "lane_id" ;
+    rdfs:domain scm:LanePerformance ; rdfs:range scm:TransportLane .
+
+# --- datatype properties ---------------------------------------------------- #
+scm:orderedUnits a owl:DatatypeProperty ; rdfs:label "orderedUnits" ; skos:altLabel "units" ;
+    rdfs:domain scm:SalesOrder ; rdfs:range xsd:integer .
+scm:promisedDate a owl:DatatypeProperty ; rdfs:label "promisedDate" ;
+    rdfs:domain scm:SalesOrder ; rdfs:range xsd:date .
+scm:priority a owl:DatatypeProperty ; rdfs:label "priority" ;
+    rdfs:domain scm:SalesOrder ; rdfs:range xsd:string .
+scm:marginPerUnit a owl:DatatypeProperty ; rdfs:label "marginPerUnit" ;
+    rdfs:domain scm:SalesOrder ; rdfs:range xsd:decimal .
+
+scm:onHand a owl:DatatypeProperty ; rdfs:label "onHand" ;
+    rdfs:domain scm:InventoryPosition ; rdfs:range xsd:integer .
+scm:reserved a owl:DatatypeProperty ; rdfs:label "reserved" ;
+    rdfs:domain scm:InventoryPosition ; rdfs:range xsd:integer .
+
+scm:transportMode a owl:DatatypeProperty ; rdfs:label "transportMode" ; skos:altLabel "mode" ;
+    rdfs:domain scm:TransportLane ; rdfs:range xsd:string .
+scm:transitDays a owl:DatatypeProperty ; rdfs:label "transitDays" ;
+    rdfs:domain scm:TransportLane ; rdfs:range xsd:integer .
+scm:costPerUnit a owl:DatatypeProperty ; rdfs:label "costPerUnit" ;
+    rdfs:domain scm:TransportLane ; rdfs:range xsd:decimal .
+scm:capacityUnits a owl:DatatypeProperty ; rdfs:label "capacityUnits" ;
+    rdfs:domain scm:TransportLane ; rdfs:range xsd:integer .
+
+scm:onTimePct a owl:DatatypeProperty ; rdfs:label "onTimePct" ;
+    rdfs:domain scm:LanePerformance ; rdfs:range xsd:decimal .
+scm:avgDelayDays a owl:DatatypeProperty ; rdfs:label "avgDelayDays" ;
+    rdfs:domain scm:LanePerformance ; rdfs:range xsd:decimal .
+scm:measuredMonth a owl:DatatypeProperty ; rdfs:label "measuredMonth" ;
+    rdfs:domain scm:LanePerformance ; rdfs:range xsd:string .

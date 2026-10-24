@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { PageHeader, Field, Modal, EmptyState } from "@/components/ui";
 import { getJSON, sendJSON } from "@/lib/api";
+import { ActingAsSelect, useActingPersona } from "@/components/ActingAs";
 import type { CapacityLine, PerAgentLimit, TenantUsage } from "@/lib/tenancy";
 import { Tenant, TenantTier, TierConfig } from "@/lib/types";
 
@@ -28,6 +29,10 @@ type TenantRich = Tenant & {
   capacity: { plan: string; lines: CapacityLine[]; anyFull: boolean; anyTight: boolean };
   perAgentLimits: PerAgentLimit[];
   modelAccess: { modelIds: string[] | null; inheritedFrom: string | null };
+  regulatory: {
+    gxp: { value: boolean; from: string | null };
+    region: { value: string | null; from: string | null };
+  };
 };
 
 const TYPE_META: Record<Tenant["type"], { label: string; icon: string; color: string }> = {
@@ -438,6 +443,8 @@ export default function TenantsPage() {
                 </div>
               </div>
 
+              <RegulatoryCard tenant={selected} onSaved={load} />
+
               {/* capacity */}
               <div className="card p-6">
                 <div className="flex items-baseline justify-between">
@@ -785,6 +792,94 @@ function Attr({ label, value }: { label: string; value: React.ReactNode }) {
     <div>
       <div className="text-xs font-medium text-slate-400">{label}</div>
       <div className="mt-1 text-sm text-slate-800">{value}</div>
+    </div>
+  );
+}
+
+/**
+ * GxP and data residency for one tenant: the EFFECTIVE value (after
+ * inheritance) and where it comes from, with an admin-only editor. These drive
+ * the "GxP data requires GxP training" and "region-bound data" policies.
+ */
+function RegulatoryCard({ tenant, onSaved }: { tenant: TenantRich; onSaved: () => Promise<void> }) {
+  const acting = useActingPersona();
+  const own = (v: unknown) => v !== undefined && v !== null;
+  const [gxp, setGxp] = useState<string>(own(tenant.gxp) ? String(tenant.gxp) : "inherit");
+  const [region, setRegion] = useState<string>(tenant.dataRegion ?? "inherit");
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  useEffect(() => {
+    setGxp(own(tenant.gxp) ? String(tenant.gxp) : "inherit");
+    setRegion(tenant.dataRegion ?? "inherit");
+    setMsg(null);
+  }, [tenant.id, tenant.gxp, tenant.dataRegion]);
+
+  const r = tenant.regulatory;
+  const source = (from: string | null) =>
+    from === null ? "default" : from === tenant.id ? "set here" : `inherited from ${from}`;
+
+  async function save() {
+    setMsg(null);
+    try {
+      await sendJSON("/api/tenants", "PATCH", {
+        id: tenant.id,
+        gxp: gxp === "inherit" ? null : gxp === "true",
+        dataRegion: region === "inherit" ? null : region,
+        personaId: acting.personaId,
+      });
+      setMsg({ ok: true, text: "Saved. Policies apply from the next request." });
+      await onSaved();
+    } catch (e) {
+      setMsg({ ok: false, text: (e as Error).message });
+    }
+  }
+
+  return (
+    <div className="card p-6">
+      <div className="flex items-baseline justify-between">
+        <h3 className="text-sm font-semibold">Regulatory</h3>
+        <span className="text-xs text-slate-400">Inherited by every tenant beneath this one</span>
+      </div>
+      <div className="mt-3 grid gap-4 md:grid-cols-2">
+        <div>
+          <div className="text-xs font-medium text-slate-500">GxP-regulated</div>
+          <div className="mt-1 text-sm">
+            <span className={`badge ${r.gxp.value ? "bg-amber-100 text-amber-800" : "bg-slate-100 text-slate-600"}`}>
+              {r.gxp.value ? "GxP" : "not GxP"}
+            </span>{" "}
+            <span className="text-xs text-slate-500">{source(r.gxp.from)}</span>
+          </div>
+          <select className="input mt-2" value={gxp} onChange={(e) => setGxp(e.target.value)}>
+            <option value="inherit">Inherit from parent</option>
+            <option value="true">GxP-regulated</option>
+            <option value="false">Not GxP (overrides parent)</option>
+          </select>
+        </div>
+        <div>
+          <div className="text-xs font-medium text-slate-500">Data region (residency)</div>
+          <div className="mt-1 text-sm">
+            <span className="badge bg-slate-100 text-slate-700">{r.region.value ?? "not region-bound"}</span>{" "}
+            <span className="text-xs text-slate-500">{source(r.region.from)}</span>
+          </div>
+          <select className="input mt-2" value={region} onChange={(e) => setRegion(e.target.value)}>
+            <option value="inherit">Inherit from parent</option>
+            <option value="US">US</option>
+            <option value="EU">EU</option>
+            <option value="JP">JP</option>
+          </select>
+        </div>
+      </div>
+      <div className="mt-4 flex flex-wrap items-end gap-3">
+        <ActingAsSelect {...acting}
+          hint="Only an admin of this tenant (or one above it) may change its regulatory attributes." />
+        <button className="btn-primary" onClick={save} disabled={!acting.personaId}>
+          Save regulatory attributes
+        </button>
+      </div>
+      {msg && (
+        <p className={`mt-3 rounded-lg px-3 py-2 text-sm ${msg.ok ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"}`}>
+          {msg.text}
+        </p>
+      )}
     </div>
   );
 }

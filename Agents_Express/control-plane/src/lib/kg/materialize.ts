@@ -67,13 +67,20 @@ export interface KgAuthorization {
 }
 
 /** Two-stage Cedar check before ANY write. */
-export function authorizeBuild(graphSourceId: string, personaId: string): KgAuthorization {
+export function authorizeBuild(
+  graphSourceId: string,
+  personaId: string,
+  tenantId?: string
+): KgAuthorization {
+  // The build acts within the source's tenant: membership (analyst+), and the
+  // GxP / residency policies, apply to the platform's only write path too.
   const base = evaluate({
     personaId,
     agentId: "kg-builder",
     action: KG_BUILD_ACTION,
     tool: KG_PERIMETER_TOOL,
     resource: graphSourceId,
+    ...(tenantId ? { tenantId } : {}),
   });
   const pd = base.decisions[0];
   const perimeter = {
@@ -104,6 +111,7 @@ export function authorizeBuild(graphSourceId: string, personaId: string): KgAuth
     action: KG_BUILD_ACTION,
     tool: kgScopedTool(graphSourceId),
     resource: graphSourceId,
+    ...(tenantId ? { tenantId } : {}),
   });
   const sd = sc.decisions[0];
   return {
@@ -136,6 +144,8 @@ export const MAX_INSTANCE_ROWS = 200;
 export interface MaterializeInput {
   graphSourceId: string;
   personaId: string;
+  /** The source's tenant, so membership and GxP/residency policy apply to the build. */
+  tenantId?: string;
   backend: Neo4jBackend;
   allowedHosts?: string[];
   ontology: DerivedOntology;
@@ -189,7 +199,7 @@ export async function materializeKnowledgeGraph(
   const notes: string[] = [];
   const skipped: string[] = [];
 
-  const authorization = authorizeBuild(input.graphSourceId, input.personaId);
+  const authorization = authorizeBuild(input.graphSourceId, input.personaId, input.tenantId);
   const actor = store.personas.find((p) => p.id === input.personaId)?.name ?? input.personaId;
   if (!authorization.allowed) {
     logAudit({
@@ -247,7 +257,7 @@ export async function materializeKnowledgeGraph(
       for (const cls of approvedClasses) {
         await session.executeWrite((tx) =>
           tx.run(
-            `MERGE (c:OntologyClass {uri: $uri})
+            `MERGE (c:OntologyClass {uri: $uri, graphSourceId: $graphSourceId})
              SET c.label = $label, c.table = $table, c.comment = $comment,
                  c.subjectColumns = $subjectColumns,
                  c.source = 'kg-build', c.buildId = $buildId`,
@@ -258,6 +268,7 @@ export async function materializeKnowledgeGraph(
               comment: cls.comment ?? null,
               subjectColumns: cls.subjectColumns,
               buildId: input.buildId,
+              graphSourceId: input.graphSourceId,
             }
           )
         );
@@ -266,11 +277,11 @@ export async function materializeKnowledgeGraph(
         for (const col of cls.columns) {
           await session.executeWrite((tx) =>
             tx.run(
-              `MERGE (p:OntologyProperty {uri: $uri})
+              `MERGE (p:OntologyProperty {uri: $uri, graphSourceId: $graphSourceId})
                  SET p.label = $label, p.column = $column, p.datatype = $datatype,
                      p.source = 'kg-build', p.buildId = $buildId
                WITH p
-               MATCH (c:OntologyClass {uri: $classUri})
+               MATCH (c:OntologyClass {uri: $classUri, graphSourceId: $graphSourceId})
                MERGE (c)-[r:HAS_PROPERTY]->(p)
                  SET r.source = 'kg-build', r.buildId = $buildId`,
               {
@@ -280,6 +291,7 @@ export async function materializeKnowledgeGraph(
                 datatype: col.datatype,
                 classUri: cls.uri,
                 buildId: input.buildId,
+              graphSourceId: input.graphSourceId,
               }
             )
           );
@@ -305,7 +317,7 @@ export async function materializeKnowledgeGraph(
         }
         await session.executeWrite((tx) =>
           tx.run(
-            `MATCH (a:OntologyClass {uri: $fromUri}), (b:OntologyClass {uri: $toUri})
+            `MATCH (a:OntologyClass {uri: $fromUri, graphSourceId: $graphSourceId}), (b:OntologyClass {uri: $toUri, graphSourceId: $graphSourceId})
              MERGE (a)-[r:RELATES_TO {predicate: $label}]->(b)
                SET r.fromColumn = $fromColumn, r.toColumn = $toColumn,
                    r.source = 'kg-build', r.buildId = $buildId`,
@@ -316,6 +328,7 @@ export async function materializeKnowledgeGraph(
               fromColumn: rel.fromColumn,
               toColumn: rel.toColumn,
               buildId: input.buildId,
+              graphSourceId: input.graphSourceId,
             }
           )
         );
@@ -352,11 +365,11 @@ export async function materializeKnowledgeGraph(
             const iri = `${cls.uri}/${String(row[keyIdx])}`;
             await session.executeWrite((tx) =>
               tx.run(
-                `MERGE (i:Instance:\`${label}\` {iri: $iri})
+                `MERGE (i:Instance:\`${label}\` {iri: $iri, graphSourceId: $graphSourceId})
                    SET i += $props, i.source = 'kg-build', i.buildId = $buildId,
                        i.displayKey = $displayKey
                  WITH i
-                 MATCH (c:OntologyClass {uri: $classUri})
+                 MATCH (c:OntologyClass {uri: $classUri, graphSourceId: $graphSourceId})
                  MERGE (i)-[r:INSTANCE_OF]->(c)
                    SET r.source = 'kg-build', r.buildId = $buildId`,
                 {
@@ -365,6 +378,7 @@ export async function materializeKnowledgeGraph(
                   classUri: cls.uri,
                   displayKey: String(row[keyIdx]),
                   buildId: input.buildId,
+              graphSourceId: input.graphSourceId,
                 }
               )
             );
@@ -380,14 +394,15 @@ export async function materializeKnowledgeGraph(
           const relType = safeIdent(rel.label, "relationship type");
           const res = await session.executeWrite((tx) =>
             tx.run(
-              `MATCH (a:Instance {source:'kg-build', buildId:$buildId})-[:INSTANCE_OF]->(:OntologyClass {uri:$fromUri})
-               MATCH (b:Instance {source:'kg-build', buildId:$buildId})-[:INSTANCE_OF]->(:OntologyClass {uri:$toUri})
+              `MATCH (a:Instance {source:'kg-build', buildId:$buildId, graphSourceId:$graphSourceId})-[:INSTANCE_OF]->(:OntologyClass {uri:$fromUri, graphSourceId:$graphSourceId})
+               MATCH (b:Instance {source:'kg-build', buildId:$buildId, graphSourceId:$graphSourceId})-[:INSTANCE_OF]->(:OntologyClass {uri:$toUri, graphSourceId:$graphSourceId})
                WHERE a[$fromColumn] IS NOT NULL AND a[$fromColumn] = b[$toColumn]
                MERGE (a)-[r:\`${relType}\`]->(b)
                  SET r.source = 'kg-build', r.buildId = $buildId
                RETURN count(r) AS n`,
               {
                 buildId: input.buildId,
+              graphSourceId: input.graphSourceId,
                 fromUri: from.uri,
                 toUri: to.uri,
                 fromColumn: rel.fromColumn,
@@ -434,7 +449,8 @@ export async function materializeKnowledgeGraph(
 export async function dropBuild(
   backend: Neo4jBackend,
   buildId: string,
-  allowedHosts?: string[]
+  allowedHosts?: string[],
+  graphSourceId?: string
 ): Promise<number> {
   const policy = validateBoltUri(backend.uri, allowedHosts);
   if (!policy.ok) throw new KgConfigError(`Bolt URI rejected: ${policy.reason}`);
@@ -449,11 +465,15 @@ export async function dropBuild(
     try {
       const res = await session.executeWrite((tx) =>
         tx.run(
+          // Scoped to the source: a build stamped for ANOTHER source cannot be
+          // dropped through this one. Legacy builds that predate the stamp
+          // (graphSourceId IS NULL) belong to no source and may be cleaned up.
           `MATCH (n {source:'kg-build', buildId:$buildId})
+           WHERE n.graphSourceId IS NULL OR n.graphSourceId = $graphSourceId
            WITH n, count(n) AS _c
            DETACH DELETE n
            RETURN count(*) AS removed`,
-          { buildId }
+          { buildId, graphSourceId: graphSourceId ?? null }
         )
       );
       return Number(res.records[0]?.get("removed") ?? 0);

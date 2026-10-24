@@ -9,7 +9,9 @@
 // results. Replace with the real Cedar engine / AVP when wiring to AWS.
 
 import { store } from "./store";
-import { inTenantSubtree } from "./tenancy";
+import { inTenantSubtree, tenantPolicyAttributes } from "./tenancy";
+import { effectiveAttributes, personaTenantDecision, roleAllows } from "./personas";
+import type { PersonaTenantDecision } from "./personas";
 // Type-only import — see the note in store.ts.
 import type {
   EvaluationRequest,
@@ -23,8 +25,11 @@ import type {
 interface ParsedCedar {
   effect: PolicyEffect;
   resource?: string; // Tool::"..." or Action target
-  conditions: Condition[];
-  conditionKind: "when" | "unless" | null;
+  /** `action in [Action::"a", ...]` — matched against the request's ACTION. */
+  actions?: string[];
+  /** Each clause is OR-of-ANDs: alternatives split on `||`. null = absent. */
+  when: Condition[][] | null;
+  unless: Condition[][] | null;
 }
 
 interface Condition {
@@ -35,6 +40,15 @@ interface Condition {
 
 function parseConditions(body: string): Condition[] {
   const conds: Condition[] = [];
+  // principal.<attr> == resource.<attr> — string equality between the two
+  // sides (data residency: the person's region against the data's). Parsed
+  // FIRST and removed, so the single-sided forms below do not misread it.
+  const both = /principal\.(\w+)\s*==\s*resource\.(\w+)/g;
+  let bm: RegExpExecArray | null;
+  while ((bm = both.exec(body)) !== null) {
+    conds.push({ attr: `__eq__${bm[1]}:${bm[2]}`, op: "==", value: 0 });
+  }
+  body = body.replace(both, " ");
   // match principal.<attr> <op> <value> (value quoted string or number)
   const re = /principal\.(\w+)\s*(==|<=|>=|<|>)\s*("([^"]*)"|\d+)/g;
   let m: RegExpExecArray | null;
@@ -45,35 +59,47 @@ function parseConditions(body: string): Condition[] {
     const value = raw.startsWith('"') ? m[4] : Number(raw);
     conds.push({ attr, op, value });
   }
-  // `resource.tenant == "<id>"` — the tenant dimension. Parsed separately
-  // from the principal.* form above because it reads off the REQUEST, not off
-  // the persona: personas are platform-wide, so a tenant claim on a persona
-  // would be a different (and currently unsupported) statement.
+  // `resource.tenant == "<id>"` — the tenant dimension, matched against the
+  // request's tenant AND its ancestors (see conditionsHold).
   const tenantRe = /resource\.tenant\s*==\s*"([^"]*)"/g;
   let tm: RegExpExecArray | null;
   while ((tm = tenantRe.exec(body)) !== null) {
     conds.push({ attr: "__tenant__", op: "==", value: tm[1] });
   }
-  // also support resource.amount <= principal.approvalLimit (cross-ref)
-  const cross = /resource\.(\w+)\s*(<=|>=|<|>|==)\s*principal\.(\w+)/.exec(body);
+  // `resource.<attr> == "<v>"` for the tenant's regulatory attributes
+  // (gxp, region, regionBound), read off the request's tenant.
+  const resRe = /resource\.(gxp|region|regionBound)\s*==\s*"([^"]*)"/g;
+  let rm: RegExpExecArray | null;
+  while ((rm = resRe.exec(body)) !== null) {
+    conds.push({ attr: `__res__${rm[1]}`, op: "==", value: rm[2] });
+  }
+  // also support resource.amount <= principal.approvalLimit (numeric cross-ref)
+  const cross = /resource\.(\w+)\s*(<=|>=|<|>)\s*principal\.(\w+)/.exec(body);
   if (cross) {
     conds.push({ attr: `__cross__${cross[1]}:${cross[3]}`, op: cross[2] as Condition["op"], value: 0 });
   }
   return conds;
 }
 
+function parseClause(cedar: string, kind: "when" | "unless"): Condition[][] | null {
+  const m = new RegExp(`\\b${kind}\\s*\\{([^}]*)\\}`).exec(cedar);
+  if (!m) return null;
+  return m[1].split("||").map((alt) => parseConditions(alt));
+}
+
 function parseCedar(cedar: string): ParsedCedar {
   const effect: PolicyEffect = /^\s*forbid/.test(cedar) ? "forbid" : "permit";
   const resourceMatch = /resource\s*==\s*Tool::"([^"]+)"/.exec(cedar);
-  let conditionKind: "when" | "unless" | null = null;
-  if (/\bunless\b/.test(cedar)) conditionKind = "unless";
-  else if (/\bwhen\b/.test(cedar)) conditionKind = "when";
-  const condBody = cedar.split(/\bwhen\b|\bunless\b/)[1] ?? "";
+  const inMatch = /action\s+in\s+\[([^\]]*)\]/.exec(cedar);
+  const actions = inMatch
+    ? [...inMatch[1].matchAll(/Action::"([^"]+)"/g)].map((a) => a[1])
+    : undefined;
   return {
     effect,
     resource: resourceMatch?.[1],
-    conditions: parseConditions(condBody),
-    conditionKind,
+    ...(actions ? { actions } : {}),
+    when: parseClause(cedar, "when"),
+    unless: parseClause(cedar, "unless"),
   };
 }
 
@@ -83,11 +109,12 @@ function toNum(v: string | undefined): number {
 }
 
 function conditionsHold(
-  parsed: ParsedCedar,
+  conditions: Condition[],
   persona: Persona,
   req: EvaluationRequest
 ): boolean {
-  for (const c of parsed.conditions) {
+  const resourceAttrs = tenantPolicyAttributes(req.tenantId, store.tenants);
+  for (const c of conditions) {
     if (c.attr === "__tenant__") {
       // A tenant-scoped policy applies to that tenant AND its descendants:
       // an org-level rule is meant to cover the BUs beneath it. Exact-match
@@ -101,6 +128,16 @@ function conditionsHold(
       ) {
         return false;
       }
+      continue;
+    }
+    if (c.attr.startsWith("__res__")) {
+      if (resourceAttrs[c.attr.slice("__res__".length)] !== c.value) return false;
+      continue;
+    }
+    if (c.attr.startsWith("__eq__")) {
+      const [pAttr, rAttr] = c.attr.slice("__eq__".length).split(":");
+      const left = persona.attributes[pAttr];
+      if (left === undefined || left !== resourceAttrs[rAttr]) return false;
       continue;
     }
     if (c.attr.startsWith("__cross__")) {
@@ -131,8 +168,22 @@ function conditionsHold(
   return true;
 }
 
+/** Cedar semantics: `when` must hold AND `unless` must not. Each clause is OR-of-ANDs. */
+function policyConditionsApply(parsed: ParsedCedar, persona: Persona, req: EvaluationRequest): boolean {
+  const any = (alts: Condition[][]) => alts.some((alt) => conditionsHold(alt, persona, req));
+  if (parsed.when && !any(parsed.when)) return false;
+  if (parsed.unless && any(parsed.unless)) return false;
+  return true;
+}
+
 function policyApplies(policy: Policy, req: EvaluationRequest): boolean {
   const parsed = parseCedar(policy.cedar);
+  // `action in [...]` names ACTIONS (runAgent, queryGraphSource, ...), not
+  // tools — so one regulatory policy can cover every way of touching data.
+  if (parsed.actions) {
+    if (!parsed.actions.includes(req.action)) return false;
+    return parsed.resource ? parsed.resource === req.tool : true;
+  }
   // Gateway policies reference the tool as `resource == Tool::"<tool>"`.
   if (parsed.resource) return parsed.resource === req.tool;
   // AVP policies reference the tool as `action == Action::"<tool>"`.
@@ -164,14 +215,7 @@ function evaluateLayer(
 
   for (const p of policies) {
     const parsed = parseCedar(p.cedar);
-    const condHold = conditionsHold(parsed, persona, req);
-    // `when` => applies only if conditions hold. `unless` => applies unless conditions hold.
-    const applies =
-      parsed.conditionKind === "unless"
-        ? !condHold
-        : parsed.conditionKind === "when"
-        ? condHold
-        : true;
+    const applies = policyConditionsApply(parsed, persona, req);
 
     if (!applies) continue;
 
@@ -206,6 +250,13 @@ function evaluateLayer(
 
 export function evaluate(req: EvaluationRequest): EvaluationResult {
   const persona = store.personas.find((p) => p.id === req.personaId);
+  if (persona?.disabled) {
+    return {
+      allowed: false,
+      decisions: [{ layer: "gateway", decision: "default-deny", reason: `${persona.name} is disabled.` }],
+      evaluatedAt: new Date().toISOString(),
+    };
+  }
   if (!persona) {
     return {
       allowed: false,
@@ -216,8 +267,39 @@ export function evaluate(req: EvaluationRequest): EvaluationResult {
     };
   }
 
+  // Layer 0: tenant membership. A request that acts within a tenant is only
+  // evaluated for a persona who belongs there (or to a tenant above it). This
+  // runs BEFORE policy because no permit should be able to grant a stranger
+  // access to a tenant: membership is identity, policy is what members may do.
+  // Requests with no tenant (the playground's expense demo) are unaffected.
+  let tenancy: PersonaTenantDecision | null = null;
+  if (req.tenantId) {
+    tenancy = personaTenantDecision(persona, req.tenantId, store.tenants);
+    if (!tenancy.allowed) {
+      return {
+        allowed: false,
+        decisions: [{ layer: "gateway", decision: "default-deny", reason: tenancy.reason }],
+        evaluatedAt: new Date().toISOString(),
+      };
+    }
+    const byRole = roleAllows(tenancy.role, req.action);
+    if (!byRole.allowed) {
+      return {
+        allowed: false,
+        decisions: [{
+          layer: "gateway",
+          decision: "default-deny",
+          reason: `${persona.name} is ${tenancy.role} in '${tenancy.via}'; ${req.action} needs ${byRole.needed} or above`,
+        }],
+        evaluatedAt: new Date().toISOString(),
+      };
+    }
+  }
+  // Cedar sees the role resolved for THIS tenant (`principal.tenantRole`).
+  const scoped: Persona = { ...persona, attributes: effectiveAttributes(persona, tenancy) };
+
   // Layer 1: gateway perimeter must explicitly permit (and not forbid).
-  const gateway = evaluateLayer("gateway", persona, req);
+  const gateway = evaluateLayer("gateway", scoped, req);
   const decisions: LayerDecision[] = [gateway];
 
   if (gateway.decision !== "permit") {
@@ -234,7 +316,7 @@ export function evaluate(req: EvaluationRequest): EvaluationResult {
     return { allowed: true, decisions, evaluatedAt: new Date().toISOString() };
   }
 
-  const avp = evaluateLayer("avp", persona, req);
+  const avp = evaluateLayer("avp", scoped, req);
   decisions.push(avp);
   const allowed = avp.decision === "permit";
   return { allowed, decisions, evaluatedAt: new Date().toISOString() };

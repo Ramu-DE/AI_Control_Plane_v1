@@ -19,6 +19,7 @@ import type {
   MappingVersion,
 } from "./entities";
 import type {
+  ApprovalMeta,
   GraphControlStore,
   ListBuildRunsQuery,
   ListGraphSourcesQuery,
@@ -157,7 +158,8 @@ export class LocalGraphControlStore implements GraphControlStore {
   async transitionGraphSource(
     graphSourceId: string,
     nextStatus: RecordStatus,
-    expectedRev: number
+    expectedRev: number,
+    meta: ApprovalMeta = {}
   ): Promise<GraphSource> {
     const current = this.data.sources.get(graphSourceId);
     if (!current) throw new NotFoundError(`graph source '${graphSourceId}' not found`);
@@ -167,6 +169,7 @@ export class LocalGraphControlStore implements GraphControlStore {
     }
     const next: GraphSource = {
       ...current,
+      ...meta,
       status: nextStatus,
       rev: (current.rev ?? 1) + 1,
       updatedAt: new Date().toISOString(),

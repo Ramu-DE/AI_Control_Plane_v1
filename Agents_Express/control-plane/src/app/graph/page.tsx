@@ -3,6 +3,7 @@
 import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import { Field, Modal, PageHeader, Pill, RadioCard } from "@/components/ui";
 import { getJSON, sendJSON } from "@/lib/api";
+import { ActingAsSelect, useActingPersona } from "@/components/ActingAs";
 import { GraphSourceConfig, GraphSourceRecord, RecordStatus } from "@/lib/types";
 
 interface PersonaSummary {
@@ -49,6 +50,7 @@ export default function GraphSourcesPage() {
   const [data, setData] = useState<GraphData>({ sources: [], personas: [] });
   const [selectedId, setSelectedId] = useState("");
   const [personaId, setPersonaId] = useState("");
+  const acting = useActingPersona();
   const [question, setQuestion] = useState(
     "What is the total fees amount by supplier name?"
   );
@@ -106,6 +108,7 @@ export default function GraphSourcesPage() {
       await sendJSON("/api/graph", "PATCH", {
         graphSourceId: source.graphSourceId,
         status,
+        ...(acting.personaId ? { personaId: acting.personaId } : {}),
       });
       await load();
     } catch (e) {
@@ -119,9 +122,12 @@ export default function GraphSourcesPage() {
         title="Graph Sources"
         subtitle="Register, govern, and route ontology-mediated data access by business unit."
         action={
-          <button className="btn-primary" onClick={() => setShowRegister(true)}>
-            + Register Graph Source
-          </button>
+          <div className="flex items-end gap-2">
+            <ActingAsSelect {...acting} />
+            <button className="btn-primary" onClick={() => setShowRegister(true)}>
+              + Register Graph Source
+            </button>
+          </div>
         }
       />
       <div className="space-y-6 px-4 pb-10 sm:px-6 lg:px-8">

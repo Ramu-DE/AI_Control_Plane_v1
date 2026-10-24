@@ -26,6 +26,12 @@
 //   GRAPH_SOURCE_BU       [fn-supply]
 
 import assert from "node:assert";
+// Maker-checker: a named submitter, and a DIFFERENT approver (lib/approvals.ts).
+const SUBMITTER = process.env.SUBMITTER_PERSONA_ID || "persona-john";
+const REVIEWER = process.env.REVIEWER_PERSONA_ID || "persona-mary";
+const actorFor = (status) =>
+  status === "Pending approval" ? { submitterPersonaId: SUBMITTER } : { reviewerPersonaId: REVIEWER };
+
 
 const BASE = (process.env.CONTROL_PLANE_URL || "http://localhost:3000/proxy/3000").replace(/\/+$/, "");
 const ID = process.env.GRAPH_SOURCE_ID || "aura-supplier-graph";
@@ -114,7 +120,7 @@ async function main() {
   for (const next of path[source.status] ?? []) {
     const r = await api("/api/graph", {
       method: "PATCH",
-      body: JSON.stringify({ graphSourceId: ID, status: next }),
+      body: JSON.stringify({ graphSourceId: ID, status: next, ...actorFor(next) }),
     });
     assert(r.status === 200, `transition -> ${next} failed: ${r.status} ${JSON.stringify(r.body)}`);
     source = r.body;

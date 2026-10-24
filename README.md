@@ -13,6 +13,11 @@ SaaS features for a regulated-pharma (Takeda) context.
 > rate limits are real application logic; **workflow steps call Bedrock for real**. Items that
 > are modeled-but-not-wired to live AWS are called out in "What's real vs. simulated".
 
+> **Start here:** [`docs/MODULES.md`](docs/MODULES.md) explains every module, how they connect,
+> and links to a file-by-file guide for each one.
+> [`SETUP.md`](SETUP.md) is the current run guide. State is now **durable** (JSON snapshot), and
+> some notes below about in-memory state predate that.
+
 ---
 
 ## 1. What this platform does (feature map)

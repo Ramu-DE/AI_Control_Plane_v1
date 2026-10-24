@@ -18,7 +18,7 @@ import { validateOutboundUrl } from "./graph/logic";
 import type { StepRun, TokenUsage, WorkflowStep } from "./types";
 import { store } from "./store";
 import { executeToolCall, toOpenAiTools } from "./tools/registry";
-import type { ToolCallRecord, ToolSpec } from "./tools/registry";
+import type { ToolCallRecord, ToolContext, ToolSpec } from "./tools/registry";
 
 export class DatabricksConfigError extends Error {
   readonly code = "DATABRICKS_CONFIG";
@@ -228,7 +228,8 @@ export async function runStepOnDatabricksWithTools(
   step: WorkflowStep,
   task: string,
   priorOutputs: { name: string; output: string }[],
-  tools: ToolSpec[]
+  tools: ToolSpec[],
+  ctx?: ToolContext
 ): Promise<DatabricksStepResult> {
   const catalog = store.models.find((m) => m.id === step.modelId);
   if (!catalog) {
@@ -319,7 +320,7 @@ export async function runStepOnDatabricksWithTools(
       } catch {
         notes.push(`model sent unparseable arguments for '${name}'`);
       }
-      const { record, payload } = await executeToolCall(name, args);
+      const { record, payload } = await executeToolCall(name, args, ctx, tools);
       toolCalls.push(record);
       messages.push({
         role: "tool",

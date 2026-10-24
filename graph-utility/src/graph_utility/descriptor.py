@@ -125,6 +125,14 @@ class GraphSource:
     # Free-form tags for governance/routing (region, sensitivity, tier, ...)
     tags: dict[str, str] = field(default_factory=dict)
     version: str = "1.0.0"
+    # The control-plane tenant (Takeda BU/BF) that owns this source, e.g.
+    # "fn-rnd". `bu` stays as the display/legacy field; when this is unset the
+    # control plane falls back to `bu`, which is how a free-text BU silently
+    # became a tenant that does not exist — so new descriptors should set it.
+    tenant_id: Optional[str] = None
+    # Which `mapping.APPROVAL_PROFILES` entry automates this source's mapping
+    # review: "gxp-strict" | "standard" | "exploratory". None = "standard".
+    approval_profile: Optional[str] = None
 
     # ----------------------------------------------------------------- #
     # Serialization
@@ -151,6 +159,8 @@ class GraphSource:
             description=d.get("description", ""),
             tags=d.get("tags", {}) or {},
             version=d.get("version", "1.0.0"),
+            tenant_id=d.get("tenant_id"),
+            approval_profile=d.get("approval_profile"),
         )
 
     @classmethod
@@ -169,6 +179,14 @@ class GraphSource:
             errs.append("bu is required")
         if not self.llm_endpoint:
             errs.append("llm_endpoint is required")
+        if self.approval_profile is not None:
+            from .mapping import APPROVAL_PROFILES
+
+            if self.approval_profile not in APPROVAL_PROFILES:
+                errs.append(
+                    f"unsupported approval_profile '{self.approval_profile}'; "
+                    f"expected one of {sorted(APPROVAL_PROFILES)}"
+                )
 
         # Graph target. Imported lazily so descriptor.py keeps importing
         # cleanly on its own — `ontobricks` pulls in the mapping module, and a

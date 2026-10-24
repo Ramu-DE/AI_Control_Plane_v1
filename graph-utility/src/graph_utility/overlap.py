@@ -627,6 +627,37 @@ def enrich_classes_with_uniqueness(
         if table is None:
             continue
 
+        # Pass 0 — the ONTOLOGY's own declaration (owl:hasKey), resolved to
+        # columns by the proposer. Declared by the ontology owner, so name
+        # shape is irrelevant; adopted only if the data confirms it. If it
+        # fails, that is reported and the shape-based passes still run.
+        if p.key_candidate and probes < max_probes:
+            probes += 1
+            try:
+                declared = verify_uniqueness(adapter, table.name, tuple(p.key_candidate),
+                                             probe_limit=probe_limit)
+            except Exception as exc:
+                declared = None
+                p.evidence.append(Evidence(
+                    "profile", f"owl:hasKey probe {table.name}.{list(p.key_candidate)} "
+                               f"failed: {exc}", weight=0.0))
+            if declared is not None:
+                proofs.append(declared)
+                if declared.proves_identity:
+                    p.evidence.append(Evidence(
+                        "uniqueness-verified",
+                        f"owl:hasKey {list(p.key_candidate)} confirmed: {declared.describe()}",
+                        weight=0.2))
+                    p.subject_columns = tuple(p.key_candidate)
+                    p.validation_issues = [
+                        i for i in p.validation_issues if i.code != "no-subject-key"]
+                    continue
+                p.validation_issues.append(ValidationIssue(
+                    "haskey-not-unique",
+                    f"the ontology declares {list(p.key_candidate)} as the key of "
+                    f"'{table.name}', but the data does not confirm it: {declared.describe()}",
+                    severity="warning"))
+
         starved = False
         adoptable: list[UniquenessProof] = []
         reported: list[UniquenessProof] = []

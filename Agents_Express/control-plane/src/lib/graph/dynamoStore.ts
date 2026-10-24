@@ -40,6 +40,7 @@ import type {
   MappingVersion,
 } from "./entities";
 import type {
+  ApprovalMeta,
   GraphControlStore,
   ListBuildRunsQuery,
   ListGraphSourcesQuery,
@@ -245,7 +246,8 @@ export class DynamoDbGraphControlStore implements GraphControlStore {
   async transitionGraphSource(
     graphSourceId: string,
     nextStatus: RecordStatus,
-    expectedRev: number
+    expectedRev: number,
+    meta: ApprovalMeta = {}
   ): Promise<GraphSource> {
     const current = await this.getGraphSource(graphSourceId);
     if (!current) throw new NotFoundError(`graph source '${graphSourceId}' not found`);
@@ -254,6 +256,7 @@ export class DynamoDbGraphControlStore implements GraphControlStore {
     }
     const next: GraphSource = {
       ...current,
+      ...meta,
       status: nextStatus,
       rev: expectedRev + 1,
       updatedAt: new Date().toISOString(),

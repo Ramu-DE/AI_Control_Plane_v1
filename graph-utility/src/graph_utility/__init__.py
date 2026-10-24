@@ -69,8 +69,11 @@ from .mapping import (
     to_r2rml,
     R2RMLError,
     name_similarity,
+    term_match,
     discovery_fingerprint,
     UnapprovedPublishError,
+    APPROVAL_PROFILES,
+    approval_policy,
     AutoApprovalPolicy,
     AutoApprovalResult,
     auto_approve,
@@ -242,9 +245,10 @@ __all__ = [
     # mapping-method comparison
     "compare", "Comparison", "ArmResult", "score_arm",
     "ARM_METADATA", "ARM_MEASURED",
-    "name_similarity", "discovery_fingerprint", "UnapprovedPublishError",
+    "name_similarity", "term_match", "discovery_fingerprint", "UnapprovedPublishError",
     "R2RMLError",
     # threshold auto-approval
+    "APPROVAL_PROFILES", "approval_policy",
     "AutoApprovalPolicy", "AutoApprovalResult", "auto_approve",
     "auto_approval_verdict", "was_auto_approved",
     "AUTO_APPROVE_MIN_CONFIDENCE", "NAME_SIMILARITY_MAX_CONFIDENCE",

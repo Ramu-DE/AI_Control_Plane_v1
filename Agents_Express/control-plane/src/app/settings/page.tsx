@@ -9,18 +9,62 @@ import {
   INFERENCE_PROVIDERS,
   InferenceProvider,
   Persona,
+  TenantRole,
 } from "@/lib/types";
 import { GovernanceTab } from "@/components/GovernanceTab";
+import { ActingAsSelect, useActingPersona } from "@/components/ActingAs";
+import { deleteJSON } from "@/lib/api";
+
+interface TenantOption {
+  id: string;
+  name: string;
+  parentId: string | null;
+}
+
+/** Tenants depth-first under their parents, for an indented picker. */
+function treeOrder(tenants: TenantOption[]): { t: TenantOption; depth: number }[] {
+  const out: { t: TenantOption; depth: number }[] = [];
+  const walk = (parentId: string | null, depth: number) => {
+    for (const t of tenants.filter((x) => x.parentId === parentId).sort((a, b) => a.name.localeCompare(b.name))) {
+      out.push({ t, depth });
+      walk(t.id, depth + 1);
+    }
+  };
+  walk(null, 0);
+  return out;
+}
 
 export default function SettingsPage() {
   const [tab, setTab] = useState<"models" | "personas" | "governance">("models");
   const [models, setModels] = useState<CatalogModel[]>([]);
   const [personas, setPersonas] = useState<Persona[]>([]);
   const [groups, setGroups] = useState<CognitoGroup[]>([]);
+  const [tenants, setTenants] = useState<TenantOption[]>([]);
   const [modelQuery, setModelQuery] = useState("");
   const [personaQuery, setPersonaQuery] = useState("");
   const [showAddModel, setShowAddModel] = useState(false);
   const [showAddPersona, setShowAddPersona] = useState(false);
+  const [editing, setEditing] = useState<Persona | null>(null);
+  const acting = useActingPersona();
+  const [personaMsg, setPersonaMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  async function removePersona(p: Persona) {
+    setPersonaMsg(null);
+    if (!acting.personaId) {
+      setPersonaMsg({ ok: false, text: "Choose who is acting first (an admin of the persona's tenants)." });
+      return;
+    }
+    try {
+      const r = await deleteJSON<{ outcome: string }>(
+        `/api/personas?id=${encodeURIComponent(p.id)}&actorPersonaId=${encodeURIComponent(acting.personaId)}`);
+      if (!r.ok) throw new Error(r.body.error ?? `failed (${r.status})`);
+      const outcome = r.body.outcome;
+      setPersonaMsg({ ok: true, text: `${p.name}: ${outcome}${outcome === "disabled" ? " (kept for the audit trail)" : ""}` });
+      await load();
+    } catch (e) {
+      setPersonaMsg({ ok: false, text: (e as Error).message });
+    }
+  }
   const [modelForm, setModelForm] = useState({
     name: "",
     modelProvider: "Anthropic",
@@ -31,11 +75,12 @@ export default function SettingsPage() {
   async function load() {
     const [m, pg] = await Promise.all([
       getJSON<CatalogModel[]>("/api/catalog"),
-      getJSON<{ personas: Persona[]; groups: CognitoGroup[] }>("/api/personas"),
+      getJSON<{ personas: Persona[]; groups: CognitoGroup[]; tenants: TenantOption[] }>("/api/personas"),
     ]);
     setModels(m);
     setPersonas(pg.personas);
     setGroups(pg.groups);
+    setTenants(pg.tenants ?? []);
   }
   useEffect(() => {
     load();
@@ -59,8 +104,10 @@ export default function SettingsPage() {
       .includes(modelQuery.toLowerCase())
   );
 
+  const tenantName = (id: string) => tenants.find((t) => t.id === id)?.name ?? id;
   const shownPersonas = personas.filter((p) =>
-    `${p.name} ${p.email} ${p.sub} ${p.groups.join(" ")} ${p.provider}`
+    `${p.name} ${p.email} ${p.sub} ${p.groups.join(" ")} ${p.provider} ${(p.memberships ?? [])
+      .map((m) => `${m.tenantId} ${tenantName(m.tenantId)} ${m.role}`).join(" ")}`
       .toLowerCase()
       .includes(personaQuery.toLowerCase())
   );
@@ -155,8 +202,9 @@ export default function SettingsPage() {
                 <div>
                   <h2 className="text-base font-semibold">Personas</h2>
                   <p className="mt-0.5 text-sm text-slate-500">
-                    Manage test personas from identity providers for agent
-                    execution testing.
+                    Identities from the IdP, scoped to Takeda tenants. A persona can only
+                    act in a tenant it is a member of (or one beneath it), and Cedar sees
+                    its role there as <span className="mono">principal.tenantRole</span>.
                   </p>
                 </div>
                 <button
@@ -165,6 +213,15 @@ export default function SettingsPage() {
                 >
                   + Add Persona
                 </button>
+              </div>
+              <div className="mt-4 flex flex-wrap items-end gap-3">
+                <ActingAsSelect {...acting}
+                  hint="Edits and removals need an admin of every tenant whose access changes; you cannot change your own." />
+                {personaMsg && (
+                  <span className={`rounded-lg px-3 py-2 text-sm ${personaMsg.ok ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"}`}>
+                    {personaMsg.text}
+                  </span>
+                )}
               </div>
               <div className="mt-4">
                 <input
@@ -179,27 +236,50 @@ export default function SettingsPage() {
                   <thead>
                     <tr className="bg-slate-50 text-left text-xs font-semibold text-slate-500">
                       <th className="px-4 py-3">Name</th>
-                      <th className="px-4 py-3">Sub</th>
+                      <th className="px-4 py-3">Tenant access</th>
+                      <th className="px-4 py-3">Region / GxP</th>
                       <th className="px-4 py-3">Groups</th>
                       <th className="px-4 py-3">Provider</th>
                       <th className="px-4 py-3">Email</th>
+                      <th className="px-4 py-3"></th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {shownPersonas.length === 0 ? (
                       <tr>
-                        <td colSpan={5} className="px-4 py-8 text-center text-slate-400">
+                        <td colSpan={7} className="px-4 py-8 text-center text-slate-400">
                           No personas.
                         </td>
                       </tr>
                     ) : (
                       shownPersonas.map((p) => (
                         <tr key={p.id}>
-                          <td className="px-4 py-3 font-medium">{p.name}</td>
                           <td className="px-4 py-3">
-                            <span className="mono rounded bg-slate-100 px-2 py-1 text-xs text-slate-600">
-                              {p.sub.slice(0, 18)}…
-                            </span>
+                            <span className="block font-medium">{p.name}</span>
+                            <span className="mono text-xs text-slate-400">{p.sub.slice(0, 13)}…</span>
+                            {p.attributes.jobTitle && (
+                              <span className="block text-xs text-slate-500">{p.attributes.jobTitle}</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3">
+                            {(p.memberships ?? []).length === 0 ? (
+                              <span className="badge bg-red-50 text-red-700">unscoped — cannot act</span>
+                            ) : (
+                              <div className="flex flex-wrap gap-1">
+                                {(p.memberships ?? []).map((m) => (
+                                  <span key={m.tenantId} className="badge bg-indigo-50 text-indigo-700"
+                                    title={`${m.role} in ${m.tenantId} and every tenant beneath it`}>
+                                    {tenantName(m.tenantId)} · {m.role}
+                                    {m.tenantId === "takeda" ? " (org-wide)" : ""}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 text-xs text-slate-600">
+                            {p.attributes.region ?? "—"}
+                            {" · "}
+                            {p.attributes.gxpTrained === "true" ? "GxP ✓" : "no GxP"}
                           </td>
                           <td className="px-4 py-3 text-slate-600">
                             {p.groups.join(", ")}
@@ -208,6 +288,16 @@ export default function SettingsPage() {
                             <span className="text-purple-500">◆</span> {p.provider}
                           </td>
                           <td className="px-4 py-3 text-slate-600">{p.email}</td>
+                          <td className="whitespace-nowrap px-4 py-3 text-right">
+                            {p.disabled ? (
+                              <span className="badge bg-slate-200 text-slate-600">disabled</span>
+                            ) : (
+                              <>
+                                <button className="btn-ghost text-xs" onClick={() => setEditing(p)}>Edit</button>
+                                <button className="btn-ghost text-xs text-red-700" onClick={() => removePersona(p)}>Remove</button>
+                              </>
+                            )}
+                          </td>
                         </tr>
                       ))
                     )}
@@ -220,6 +310,20 @@ export default function SettingsPage() {
           {tab === "governance" && <GovernanceTab />}
         </div>
       </div>
+
+      {editing && (
+        <EditPersonaModal
+          persona={editing}
+          tenants={tenants}
+          actorPersonaId={acting.personaId}
+          onClose={() => setEditing(null)}
+          onSaved={async (text) => {
+            setEditing(null);
+            setPersonaMsg({ ok: true, text });
+            await load();
+          }}
+        />
+      )}
 
       {showAddModel && (
         <Modal
@@ -290,6 +394,7 @@ export default function SettingsPage() {
       {showAddPersona && (
         <AddPersonaModal
           groups={groups}
+          tenants={tenants}
           onClose={() => setShowAddPersona(false)}
           onAdded={async () => {
             setShowAddPersona(false);
@@ -304,17 +409,25 @@ export default function SettingsPage() {
 
 function AddPersonaModal({
   groups,
+  tenants,
   onClose,
   onAdded,
 }: {
   groups: CognitoGroup[];
+  tenants: TenantOption[];
   onClose: () => void;
   onAdded: () => void;
 }) {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
-  const [provider, setProvider] = useState<Persona["provider"]>("AWS Cognito");
+  const [provider, setProvider] = useState<Persona["provider"]>("Entra ID");
   const [selected, setSelected] = useState<string[]>([]);
+  const [tenantId, setTenantId] = useState("");
+  const [role, setRole] = useState<TenantRole>("analyst");
+  const [region, setRegion] = useState("US");
+  const [gxpTrained, setGxpTrained] = useState(false);
+  const [jobTitle, setJobTitle] = useState("");
+  const tree = treeOrder(tenants);
   const [error, setError] = useState<string | null>(null);
 
   function toggle(g: string) {
@@ -331,6 +444,11 @@ function AddPersonaModal({
         email,
         provider,
         groups: selected,
+        tenantId,
+        role,
+        region,
+        gxpTrained,
+        ...(jobTitle ? { jobTitle } : {}),
       });
       onAdded();
     } catch (e) {
@@ -350,7 +468,7 @@ function AddPersonaModal({
           </button>
           <button
             className="btn-primary"
-            disabled={!name || !email || selected.length === 0}
+            disabled={!name || !email || !tenantId}
             onClick={add}
           >
             Add Persona
@@ -373,9 +491,49 @@ function AddPersonaModal({
             className="input"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            placeholder="jane_doe@anycompany.com"
+            placeholder="jane.doe@takeda.com"
           />
         </Field>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Tenant (BU / function)" hint="Membership covers this tenant and everything beneath it — never siblings or parents.">
+            <select className="input" value={tenantId} onChange={(e) => setTenantId(e.target.value)}>
+              <option value="">Select a tenant…</option>
+              {tree.map(({ t, depth }) => (
+                <option key={t.id} value={t.id}>
+                  {"\u00a0\u00a0".repeat(depth)}{depth ? "└ " : ""}{t.name} ({t.id})
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Role in that tenant">
+            <select className="input" value={role} onChange={(e) => setRole(e.target.value as TenantRole)}>
+              <option value="viewer">viewer — read results</option>
+              <option value="analyst">analyst — run agents and workflows</option>
+              <option value="approver">approver — approve review gates and records</option>
+              <option value="admin">admin — manage the tenant</option>
+            </select>
+          </Field>
+          <Field label="Data region (residency)">
+            <select className="input" value={region} onChange={(e) => setRegion(e.target.value)}>
+              {["US", "EU", "JP", "GLOBAL"].map((r) => <option key={r} value={r}>{r}</option>)}
+            </select>
+          </Field>
+          <Field label="Job title (optional)">
+            <input className="input" value={jobTitle} onChange={(e) => setJobTitle(e.target.value)}
+              placeholder="Clinical Data Scientist" />
+          </Field>
+        </div>
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" className="h-4 w-4 accent-slate-900" checked={gxpTrained}
+            onChange={(e) => setGxpTrained(e.target.checked)} />
+          GxP trained <span className="text-xs text-slate-500">(Cedar: principal.gxpTrained)</span>
+        </label>
+        {tenantId && (
+          <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
+            IdP group this persona will carry:{" "}
+            <span className="mono">TKD-{tenantId.toUpperCase()}-{role.toUpperCase()}</span>
+          </p>
+        )}
         <Field label="Identity Provider">
           <select
             className="input"
@@ -387,7 +545,7 @@ function AddPersonaModal({
           </select>
         </Field>
         <div>
-          <span className="label">Assign Groups</span>
+          <span className="label">Seniority group (optional — drives the expense demo&apos;s approval limit)</span>
           <div className="max-h-48 space-y-1 overflow-y-auto rounded-lg border border-slate-200 p-2">
             {groups.map((g) => (
               <label
@@ -432,6 +590,113 @@ function AddPersonaModal({
             </div>
           ))}
         </div>
+      </div>
+    </Modal>
+  );
+}
+
+function EditPersonaModal({
+  persona,
+  tenants,
+  actorPersonaId,
+  onClose,
+  onSaved,
+}: {
+  persona: Persona;
+  tenants: TenantOption[];
+  actorPersonaId: string;
+  onClose: () => void;
+  onSaved: (text: string) => Promise<void>;
+}) {
+  const [memberships, setMemberships] = useState<{ tenantId: string; role: TenantRole }[]>(
+    (persona.memberships ?? []).map((m) => ({ ...m })));
+  const [region, setRegion] = useState(persona.attributes.region ?? "US");
+  const [gxpTrained, setGxpTrained] = useState(persona.attributes.gxpTrained === "true");
+  const [jobTitle, setJobTitle] = useState(persona.attributes.jobTitle ?? "");
+  const [error, setError] = useState<string | null>(null);
+  const tree = treeOrder(tenants);
+
+  const update = (i: number, patch: Partial<{ tenantId: string; role: TenantRole }>) =>
+    setMemberships((ms) => ms.map((m, j) => (j === i ? { ...m, ...patch } : m)));
+
+  async function save() {
+    setError(null);
+    try {
+      await sendJSON("/api/personas", "PATCH", {
+        id: persona.id,
+        actorPersonaId,
+        memberships: memberships.filter((m) => m.tenantId),
+        region,
+        gxpTrained,
+        jobTitle,
+      });
+      await onSaved(`${persona.name} updated`);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  return (
+    <Modal
+      title={`Edit ${persona.name}`}
+      subtitle="Change tenant access and attributes. You can only change access in tenants you administer."
+      onClose={onClose}
+      footer={
+        <>
+          <button className="btn-ghost" onClick={onClose}>Cancel</button>
+          <button className="btn-primary" disabled={!actorPersonaId || memberships.every((m) => !m.tenantId)}
+            onClick={save}>
+            Save
+          </button>
+        </>
+      }
+    >
+      <div className="space-y-4">
+        {!actorPersonaId && (
+          <p className="text-sm text-amber-700">Choose who is acting (above the table) before saving.</p>
+        )}
+        {error && <p className="text-sm text-red-600">{error}</p>}
+        <div>
+          <span className="label">Tenant access</span>
+          <div className="space-y-2">
+            {memberships.map((m, i) => (
+              <div key={i} className="flex gap-2">
+                <select className="input" value={m.tenantId} onChange={(e) => update(i, { tenantId: e.target.value })}>
+                  <option value="">Select a tenant…</option>
+                  {tree.map(({ t, depth }) => (
+                    <option key={t.id} value={t.id}>
+                      {"\u00a0\u00a0".repeat(depth)}{depth ? "└ " : ""}{t.name} ({t.id})
+                    </option>
+                  ))}
+                </select>
+                <select className="input w-40" value={m.role} onChange={(e) => update(i, { role: e.target.value as TenantRole })}>
+                  {["viewer", "analyst", "approver", "admin"].map((r) => <option key={r} value={r}>{r}</option>)}
+                </select>
+                <button className="btn-ghost text-red-700" onClick={() => setMemberships((ms) => ms.filter((_, j) => j !== i))}>
+                  ✕
+                </button>
+              </div>
+            ))}
+            <button className="btn-ghost text-sm" onClick={() => setMemberships((ms) => [...ms, { tenantId: "", role: "viewer" }])}>
+              + Add tenant
+            </button>
+          </div>
+        </div>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Data region">
+            <select className="input" value={region} onChange={(e) => setRegion(e.target.value)}>
+              {["US", "EU", "JP", "GLOBAL"].map((r) => <option key={r} value={r}>{r}</option>)}
+            </select>
+          </Field>
+          <Field label="Job title">
+            <input className="input" value={jobTitle} onChange={(e) => setJobTitle(e.target.value)} />
+          </Field>
+        </div>
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" className="h-4 w-4 accent-slate-900" checked={gxpTrained}
+            onChange={(e) => setGxpTrained(e.target.checked)} />
+          GxP trained
+        </label>
       </div>
     </Modal>
   );

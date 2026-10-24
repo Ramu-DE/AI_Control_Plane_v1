@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { store, newId, logAudit } from "@/lib/store";
+import { personaTenantDecision } from "@/lib/personas";
+import { evaluate } from "@/lib/evaluator";
+import { REVIEW_GATE_ACTION, REVIEW_GATE_TOOL } from "@/lib/regulatory";
 import { newStepRun } from "@/lib/bedrock";
 // Provider calls go through the broker, never directly. See lib/modelBroker.ts
 // — and tests/model-broker.test.ts, which fails if any route imports a
@@ -76,16 +79,6 @@ async function runStep(
     ...resolved.step,
     prompt: promptPrefix ? `${promptPrefix}${resolved.step.prompt}` : resolved.step.prompt,
   };
-
-  // Real tool calling is only available on the Databricks plane today (verified:
-  // the FM endpoints return finish_reason "tool_calls"). A Bedrock step with
-  // executable tools still runs, but without them — and says so.
-  if (resolved.executor !== "databricks" && resolved.executableTools.length > 0) {
-    notes.push(
-      `${resolved.executableTools.length} executable tool(s) were not offered: tool calling ` +
-        `is implemented for the Databricks plane only`
-    );
-  }
 
   let result;
   try {
@@ -171,7 +164,9 @@ export async function GET() {
       tenantName: t.tenantName,
       parentId: t.parentId ?? null,
     })),
-    personas: store.personas.map((p) => ({ id: p.id, name: p.name, groups: p.groups })),
+    personas: store.personas.map((p) => ({
+      id: p.id, name: p.name, groups: p.groups, memberships: p.memberships ?? [],
+    })),
   });
 }
 
@@ -258,7 +253,7 @@ async function advance(run: WorkflowRun, workflow: Workflow): Promise<void> {
 export async function POST(req: NextRequest) {
   const body = (await req.json()) as
     | { op: "start"; workflowId: string; input: string; personaId?: string }
-    | { op: "decision"; runId: string; decision: "approve" | "revise" | "deny"; revisedOutput?: string; note?: string }
+    | { op: "decision"; runId: string; decision: "approve" | "revise" | "deny"; revisedOutput?: string; note?: string; reviewerPersonaId?: string }
     | { op: "rerun"; runId: string; stepIndex: number }
     | { op: "resume"; runId: string }
     | { op: "create"; name: string; description?: string; tenantId: string; steps?: Workflow["steps"] };
@@ -325,6 +320,18 @@ export async function POST(req: NextRequest) {
     }
     if (body.personaId && !store.personas.some((p) => p.id === body.personaId)) {
       return NextResponse.json({ error: "unknown personaId" }, { status: 400 });
+    }
+    // The run acts within the workflow's tenant, so the persona must belong to
+    // it. Refused here, with the reason, rather than step by step later.
+    if (body.personaId) {
+      const persona = store.personas.find((p) => p.id === body.personaId)!;
+      const member = personaTenantDecision(persona, wf.tenantId, store.tenants);
+      if (!member.allowed) {
+        logAudit({ category: "agent", action: "workflow-start-denied", actor: persona.name,
+          tenantId: wf.tenantId, detail: `DENY start of '${wf.name}': ${member.reason}` });
+        return NextResponse.json(
+          { error: member.reason, code: "PERSONA_NOT_IN_TENANT" }, { status: 403 });
+      }
     }
 
     const now = new Date().toISOString();
@@ -395,7 +402,39 @@ export async function POST(req: NextRequest) {
     if (!sr || sr.status !== "awaiting-review") {
       return NextResponse.json({ error: "no step awaiting review" }, { status: 400 });
     }
-    sr.reviewer = "Workshop Admin";
+    // WHO decides is part of the decision. The reviewer must be a real
+    // persona, an approver (or admin) in the run's tenant, a different person
+    // from the one who started the run (four eyes), and pass Cedar for
+    // approveReviewGate — so the GxP and residency policies bind approvers too.
+    const reviewer = store.personas.find((p) => p.id === body.reviewerPersonaId);
+    if (!reviewer) {
+      return NextResponse.json(
+        { error: "reviewerPersonaId is required: a review decision must name who took it",
+          code: "REVIEWER_REQUIRED" }, { status: 400 });
+    }
+    if (run.personaId && reviewer.id === run.personaId) {
+      logAudit({ category: "agent", action: "workflow-gate-denied", actor: reviewer.name,
+        tenantId: run.tenantId, detail: `DENY self-review at '${sr.name}' in run of '${run.workflowName}'` });
+      return NextResponse.json(
+        { error: `${reviewer.name} started this run and cannot also review it (four-eyes rule)`,
+          code: "SELF_REVIEW" }, { status: 403 });
+    }
+    const gate = evaluate({
+      personaId: reviewer.id,
+      agentId: "review-gate",
+      action: REVIEW_GATE_ACTION,
+      tool: REVIEW_GATE_TOOL,
+      resource: run.id,
+      tenantId: run.tenantId,
+    });
+    if (!gate.allowed) {
+      const why = gate.decisions[gate.decisions.length - 1]?.reason ?? "denied";
+      logAudit({ category: "agent", action: "workflow-gate-denied", actor: reviewer.name,
+        tenantId: run.tenantId, detail: `DENY ${body.decision} at '${sr.name}' in run of '${run.workflowName}': ${why}` });
+      return NextResponse.json({ error: why, code: "REVIEWER_NOT_PERMITTED", decision: gate }, { status: 403 });
+    }
+    sr.reviewer = reviewer.name;
+    sr.reviewerPersonaId = reviewer.id;
     sr.reviewNote = body.note;
     if (body.decision === "approve") {
       sr.status = "approved";
@@ -413,7 +452,7 @@ export async function POST(req: NextRequest) {
       run.status = "denied";
       run.updatedAt = new Date().toISOString();
     }
-    logAudit({ category: "agent", action: "workflow-gate", actor: "Workshop Admin", tenantId: run.tenantId, detail: `${body.decision.toUpperCase()} at '${sr.name}' in run of '${run.workflowName}'` });
+    logAudit({ category: "agent", action: "workflow-gate", actor: reviewer.name, tenantId: run.tenantId, detail: `${body.decision.toUpperCase()} at '${sr.name}' in run of '${run.workflowName}' by ${reviewer.name} (${reviewer.id})` });
     return NextResponse.json(run);
   }
 

@@ -23,7 +23,12 @@ interface AgentOption {
 }
 interface ModelOption { id: string; name: string; inferenceProvider: string }
 interface TenantOption { id: string; tenantName: string; parentId?: string | null }
-interface PersonaOption { id: string; name: string; groups: string[] }
+interface PersonaOption {
+  id: string;
+  name: string;
+  groups: string[];
+  memberships?: { tenantId: string; role: string }[];
+}
 interface WorkflowsData {
   workflows: Workflow[];
   runs: WorkflowRun[];
@@ -59,6 +64,7 @@ export default function WorkflowsPage() {
   const [tenants, setTenants] = useState<TenantOption[]>([]);
   const [personas, setPersonas] = useState<PersonaOption[]>([]);
   const [personaId, setPersonaId] = useState("");
+  const [reviewerId, setReviewerId] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [error, setError] = useState("");
   // Deep link from the Tenants console: /workflows?tenant=<id>. Read from
@@ -158,10 +164,15 @@ export default function WorkflowsPage() {
         runId: activeRun.id,
         decision,
         revisedOutput: decision === "revise" ? reviseText : undefined,
+        reviewerPersonaId: reviewerId,
       });
       setActiveRun(run);
       setReviseText("");
+      setError("");
       await load();
+    } catch (e) {
+      // Refusals (not an approver here, four-eyes, GxP/residency) carry the reason.
+      setError((e as Error).message);
     } finally {
       setBusy(false);
     }
@@ -424,8 +435,23 @@ export default function WorkflowsPage() {
                   </div>
                   <p className="mt-1 text-xs text-amber-800">
                     Approve to continue, revise the output, or deny to stop the
-                    run.
+                    run. The reviewer must be an approver in this run&apos;s tenant and
+                    not the person who started it; GxP and residency policies apply.
                   </p>
+                  <label className="mt-3 block text-xs font-medium text-amber-900">
+                    Reviewer
+                    <select className="input mt-1" value={reviewerId}
+                      onChange={(e) => setReviewerId(e.target.value)}>
+                      <option value="">Select who is deciding…</option>
+                      {personas
+                        .filter((p) => p.id !== activeRun?.personaId)
+                        .map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.name} — {(p.memberships ?? []).map((m) => `${m.role}@${m.tenantId}`).join(", ") || "unscoped"}
+                          </option>
+                        ))}
+                    </select>
+                  </label>
                   <textarea
                     className="input mt-3 h-24"
                     placeholder="(optional) revised output — used if you click Revise"
@@ -435,21 +461,21 @@ export default function WorkflowsPage() {
                   <div className="mt-3 flex gap-2">
                     <button
                       className="btn-primary"
-                      disabled={busy}
+                      disabled={busy || !reviewerId}
                       onClick={() => decide("approve")}
                     >
                       Approve
                     </button>
                     <button
                       className="btn-ghost"
-                      disabled={busy || !reviseText}
+                      disabled={busy || !reviseText || !reviewerId}
                       onClick={() => decide("revise")}
                     >
                       Revise &amp; continue
                     </button>
                     <button
                       className="btn-ghost"
-                      disabled={busy}
+                      disabled={busy || !reviewerId}
                       onClick={() => decide("deny")}
                     >
                       Deny

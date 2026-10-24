@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { PageHeader, Pill, EmptyState } from "@/components/ui";
 import { getJSON, sendJSON } from "@/lib/api";
+import { ActingAsSelect, useActingPersona } from "@/components/ActingAs";
 
 interface ApprovalItem {
   id: string;
@@ -18,6 +19,7 @@ export default function ApprovalsPage() {
   const [items, setItems] = useState<ApprovalItem[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const acting = useActingPersona();
 
   async function load() {
     const d = await getJSON<{ items: ApprovalItem[] }>("/api/approvals");
@@ -33,35 +35,20 @@ export default function ApprovalsPage() {
     setError(null);
     try {
       if (item.kind === "registry-record") {
-        // Draft -> Pending approval -> Approved | Rejected
-        if (action === "submit") {
-          await sendJSON("/api/registry", "PATCH", {
-            id: item.id,
-            status: "Pending approval",
-          });
-        } else if (action === "approve") {
-          if (item.status === "Draft") {
-            await sendJSON("/api/registry", "PATCH", {
-              id: item.id,
-              status: "Pending approval",
-            });
-          }
-          await sendJSON("/api/registry", "PATCH", {
-            id: item.id,
-            status: "Approved",
-          });
-        } else {
-          if (item.status === "Draft") {
-            await sendJSON("/api/registry", "PATCH", {
-              id: item.id,
-              status: "Pending approval",
-            });
-          }
-          await sendJSON("/api/registry", "PATCH", {
-            id: item.id,
-            status: "Rejected",
-          });
+        // Maker-checker (lib/approvals.ts): a named submitter, then a DIFFERENT
+        // approver. Approving straight from Draft would be one person doing
+        // both, so a Draft is only ever submitted here.
+        if (!acting.personaId) {
+          throw new Error("Choose who is acting first: submitting needs analyst+, deciding needs approver+ in the record's tenant.");
         }
+        if (action !== "submit" && item.status === "Draft") {
+          throw new Error("Submit it for approval first. A different approver then decides (four-eyes rule).");
+        }
+        await sendJSON("/api/registry", "PATCH", {
+          id: item.id,
+          status: action === "submit" ? "Pending approval" : action === "approve" ? "Approved" : "Rejected",
+          personaId: acting.personaId,
+        });
       } else {
         // library policy: Draft -> In Review -> Published
         if (action === "submit") {
@@ -108,6 +95,9 @@ export default function ApprovalsPage() {
             {error}
           </div>
         )}
+        <div className="mb-4">
+          <ActingAsSelect {...acting} />
+        </div>
         <div className="mb-5 grid grid-cols-1 gap-4 sm:grid-cols-3">
           {[
             ["Pending total", items.length],

@@ -18,6 +18,12 @@
  *   node integration/smoke_control_plane.mjs [--base http://127.0.0.1:3000/proxy/3000]
  */
 
+// Maker-checker: a named submitter, and a DIFFERENT approver (lib/approvals.ts).
+const SUBMITTER = process.env.SUBMITTER_PERSONA_ID || "persona-john";
+const REVIEWER = process.env.REVIEWER_PERSONA_ID || "persona-mary";
+const actorFor = (status) =>
+  status === "Pending approval" ? { submitterPersonaId: SUBMITTER } : { reviewerPersonaId: REVIEWER };
+
 const argv = process.argv.slice(2);
 const baseArg = argv.indexOf("--base");
 const BASE = baseArg >= 0 ? argv[baseArg + 1] : "http://127.0.0.1:3000/proxy/3000";
@@ -570,7 +576,7 @@ async function toolExecutionJourney() {
     : skip("Draft -> Approved directly is refused", `allowed (${jump.status}) — transition table may permit it`);
 
   for (const next of ["Pending approval", "Approved"]) {
-    const r = await req("PATCH", "/registry", { id: rec.json.id, status: next });
+    const r = await req("PATCH", "/registry", { id: rec.json.id, status: next, ...actorFor(next) });
     r.status < 300
       ? ok(`PATCH /api/registry -> ${next}`)
       : bad(`PATCH /api/registry -> ${next}`, `${r.status}: ${r.text.slice(0, 140)}`);
@@ -663,11 +669,27 @@ async function approvalJourney() {
   const before = await req("GET", "/approvals");
   const beforeCount = (before.json?.items || []).length;
 
+  // A decision must name its reviewer, who may not be the run's starter.
+  const selfReview = await req("POST", "/workflows", {
+    op: "decision", runId: state.runId, decision: "approve", note: "self",
+    reviewerPersonaId: "persona-john",
+  });
+  selfReview.status === 403
+    ? ok("the person who started a run cannot review it (four eyes)", `403 ${selfReview.json?.code}`)
+    : bad("the person who started a run cannot review it (four eyes)", `status ${selfReview.status}`);
+  const anonymous = await req("POST", "/workflows", {
+    op: "decision", runId: state.runId, decision: "approve", note: "anon",
+  });
+  anonymous.status === 400
+    ? ok("a decision with no reviewer is refused", `400 ${anonymous.json?.code}`)
+    : bad("a decision with no reviewer is refused", `status ${anonymous.status}`);
+
   const decide = await req("POST", "/workflows", {
     op: "decision",
     runId: state.runId,
     decision: "approve",
     note: "Approved by the control-plane smoke test",
+    reviewerPersonaId: "persona-mary",
   });
   if (decide.status < 300) {
     ok("POST /api/workflows {op:decision} approve", `run status=${(decide.json?.run || decide.json)?.status}`);
@@ -758,11 +780,17 @@ async function governedPaths() {
 
   // --- Neo4j read path ---
   const sources = (await req("GET", "/kg")).json?.sources || [];
-  const neo = sources.find((s) => s.backend === "neo4j" && s.status === "Approved");
+  // Explorable = an Approved Neo4j source with a build spec (see lib/kg/spec.ts).
+  const neo = sources.find((s) => s.backend === "neo4j" && s.status === "Approved" && s.canExplore);
   if (!neo) {
-    skip("Neo4j graph read", "no Approved neo4j graph source");
+    skip("Neo4j graph read", "no Approved, explorable neo4j graph source");
   } else {
-    const g = await req("GET", `/kg?graphSourceId=${encodeURIComponent(neo.graphSourceId)}&instances=1`);
+    const anon = await req("GET", `/kg?graphSourceId=${encodeURIComponent(neo.graphSourceId)}&instances=1`);
+    anon.status === 400 && anon.json?.code === "PERSONA_REQUIRED"
+      ? ok("an anonymous graph read is refused", `400 ${anon.json.code}`)
+      : bad("an anonymous graph read is refused", `status ${anon.status}`);
+    const g = await req("GET",
+      `/kg?graphSourceId=${encodeURIComponent(neo.graphSourceId)}&instances=1&personaId=persona-john`);
     if (g.status === 200 && g.json?.truncation) {
       ok("GET /api/kg (live Neo4j read)",
          `${g.json.truncation.nodesReturned}/${g.json.truncation.nodesTotal} nodes, complete=${g.json.truncation.complete}`);

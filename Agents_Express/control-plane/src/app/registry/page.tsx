@@ -13,6 +13,7 @@ import {
   EmptyState,
 } from "@/components/ui";
 import { AwsModeBadge } from "@/components/AwsModeBadge";
+import { ActingAsSelect, useActingPersona } from "@/components/ActingAs";
 import { deleteJSON, getJSON, sendJSON } from "@/lib/api";
 import {
   CredentialType,
@@ -370,6 +371,7 @@ function CreateRecord({
 }) {
   const [recordSource, setRecordSource] =
     useState<RecordSource>("synchronize-from-endpoint");
+  const submitter = useActingPersona();
   const [type, setType] = useState<RecordType>("MCP");
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -454,6 +456,7 @@ function CreateRecord({
         await sendJSON("/api/registry", "PATCH", {
           id: rec.id,
           status: "Pending approval" as RecordStatus,
+          ...(submitter.personaId ? { personaId: submitter.personaId } : {}),
         });
       }
       onDone();
@@ -666,6 +669,8 @@ function CreateRecord({
           <button className="btn-ghost" onClick={() => submit("draft")} disabled={submitting}>
             {submitting ? "Saving…" : "Create as draft"}
           </button>
+          <ActingAsSelect {...submitter}
+            hint="Who is submitting: an analyst or above in the record's tenant. A different approver decides." />
           <button className="btn-primary" onClick={() => submit("submit")} disabled={submitting}>
             {submitting ? "Submitting…" : "Create and submit for approval"}
           </button>
@@ -686,6 +691,8 @@ function RecordDetails({
   onChanged: () => Promise<void>;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const acting = useActingPersona();
+  const [updateError, setUpdateError] = useState<string | null>(null);
 
   const nextActions = useMemo(() => {
     const map: Record<RecordStatus, { label: string; to: RecordStatus }[]> = {
@@ -702,9 +709,19 @@ function RecordDetails({
   }, [record.status]);
 
   async function update(to: RecordStatus) {
-    await sendJSON("/api/registry", "PATCH", { id: record.id, status: to });
+    setUpdateError(null);
     setMenuOpen(false);
-    await onChanged();
+    try {
+      await sendJSON("/api/registry", "PATCH", {
+        id: record.id,
+        status: to,
+        ...(acting.personaId ? { personaId: acting.personaId } : {}),
+      });
+      await onChanged();
+    } catch (e) {
+      // Maker-checker refusals (no persona, not an approver here, own submission, GxP) carry the reason.
+      setUpdateError((e as Error).message);
+    }
   }
 
   const [removing, setRemoving] = useState(false);
@@ -765,7 +782,8 @@ function RecordDetails({
         title="Record Details"
         subtitle="View detailed information about this registry record"
         actions={
-          <div className="relative">
+          <div className="relative flex items-end gap-2">
+            <ActingAsSelect {...acting} />
             <button
               type="button"
               className="btn-primary"
@@ -836,8 +854,17 @@ function RecordDetails({
             <Detail k="Last updated" v={fmt(record.createdAt)} />
             <Detail k="Record type" v={record.type} />
             <Detail k="Created" v={fmt(record.createdAt)} />
+            <Detail k="Tenant" v={record.tenantId ?? "platform-provided (decided at org root)"} />
+            <Detail k="Submitted by" v={record.submittedByPersonaId ?? "—"} />
+            <Detail
+              k="Decided by"
+              v={record.decidedBy ? `${record.decidedBy} (${record.decidedByPersonaId})${record.decidedAt ? " · " + fmt(record.decidedAt) : ""}` : "—"}
+            />
           </div>
         </div>
+        {updateError && (
+          <div className="rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">{updateError}</div>
+        )}
 
         {/* Endpoint / Lambda */}
         {record.endpoint && (

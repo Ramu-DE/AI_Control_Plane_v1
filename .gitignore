@@ -31,3 +31,6 @@ Agents_Express/aws-audit/logs/
 # Neo4j Aura connection-detail exports contain a live password.
 Neo4j-*.txt
 *.env.local
+
+# local credentials file — never commit
+Neo4j-*.txt

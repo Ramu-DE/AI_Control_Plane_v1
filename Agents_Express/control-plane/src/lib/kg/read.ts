@@ -71,10 +71,12 @@ export const MAX_DEPTH = 3;
 /** Count the whole kg-build subgraph so "showing N of M" is truthful. */
 async function countAll(
   backend: Neo4jBackend,
-  buildId?: string
+  buildId?: string,
+  graphSourceId?: string
 ): Promise<{ nodes: number; edges: number }> {
-  const filter = buildId ? " AND n.buildId = $buildId" : "";
-  const params = buildId ? { buildId } : {};
+  const filter = (buildId ? " AND n.buildId = $buildId" : "") +
+    (graphSourceId ? " AND n.graphSourceId = $gs" : "");
+  const params = { ...(buildId ? { buildId } : {}), ...(graphSourceId ? { gs: graphSourceId } : {}) };
   const n = await runReadQuery(
     backend,
     `MATCH (n) WHERE n.source = 'kg-build'${filter} RETURN count(n) AS c`,
@@ -85,6 +87,7 @@ async function countAll(
     backend,
     `MATCH (a)-[r]->(b) WHERE a.source = 'kg-build' AND b.source = 'kg-build'` +
       (buildId ? " AND a.buildId = $buildId AND b.buildId = $buildId" : "") +
+      (graphSourceId ? " AND a.graphSourceId = $gs AND b.graphSourceId = $gs" : "") +
       ` RETURN count(r) AS c`,
     params,
     { limit: 1 }
@@ -188,6 +191,7 @@ function absorbNodeRow(
 const NODE_PROJECTION = `
   WITH DISTINCT n
   OPTIONAL MATCH (n)-[rel]-(nb) WHERE nb.source = 'kg-build'
+    AND (n.graphSourceId IS NULL OR nb.graphSourceId = n.graphSourceId)
   WITH n, count(DISTINCT rel) AS degree,
        collect(DISTINCT CASE WHEN nb IS NULL THEN NULL ELSE {
          id: coalesce(nb.uri, nb.iri),
@@ -210,20 +214,26 @@ const NODE_PROJECTION = `
  */
 export async function readKnowledgeGraph(
   backend: Neo4jBackend,
-  opts: { buildId?: string; includeInstances?: boolean; limit?: number } = {}
+  opts: { buildId?: string; includeInstances?: boolean; limit?: number; graphSourceId?: string } = {}
 ): Promise<KgGraph> {
   const limit = Math.min(Math.max(opts.limit ?? MAX_NODES, 10), MAX_NODES);
   const nodes = new Map<string, KgNode>();
   const edges: KgEdge[] = [];
   const buildIds = new Set<string>();
 
-  const totals = await countAll(backend, opts.buildId);
+  const totals = await countAll(backend, opts.buildId, opts.graphSourceId);
 
   const labelFilter = opts.includeInstances
     ? "n:OntologyClass OR n:OntologyProperty OR n:Instance"
     : "n:OntologyClass OR n:OntologyProperty";
-  const buildFilter = opts.buildId ? " AND n.buildId = $buildId" : "";
-  const params = opts.buildId ? { buildId: opts.buildId, limit } : { limit };
+  // Scoped to ONE source when given: a shared database holds other sources' builds.
+  const buildFilter = (opts.buildId ? " AND n.buildId = $buildId" : "") +
+    (opts.graphSourceId ? " AND n.graphSourceId = $gs" : "");
+  const params = {
+    limit,
+    ...(opts.buildId ? { buildId: opts.buildId } : {}),
+    ...(opts.graphSourceId ? { gs: opts.graphSourceId } : {}),
+  };
 
   const res = await runReadQuery(
     backend,
@@ -247,7 +257,7 @@ export async function readKnowledgeGraph(
  */
 export async function readNeighborhood(
   backend: Neo4jBackend,
-  opts: { nodeId: string; depth?: number; limit?: number; buildId?: string }
+  opts: { nodeId: string; depth?: number; limit?: number; buildId?: string; graphSourceId?: string }
 ): Promise<KgGraph> {
   const nodeId = (opts.nodeId || "").trim();
   if (!nodeId) throw new Error("nodeId is required to traverse");
@@ -262,22 +272,24 @@ export async function readNeighborhood(
   const nodes = new Map<string, KgNode>();
   const edges: KgEdge[] = [];
   const buildIds = new Set<string>();
-  const totals = await countAll(backend, opts.buildId);
+  const totals = await countAll(backend, opts.buildId, opts.graphSourceId);
+  const gsFilter = opts.graphSourceId ? " AND origin.graphSourceId = $gs" : "";
+  const gsReached = opts.graphSourceId ? " AND reached.graphSourceId = $gs" : "";
 
   const res = await runReadQuery(
     backend,
-    `MATCH (origin) WHERE origin.source = 'kg-build' AND coalesce(origin.uri, origin.iri) = $nodeId
+    `MATCH (origin) WHERE origin.source = 'kg-build' AND coalesce(origin.uri, origin.iri) = $nodeId${gsFilter}
      CALL {
        WITH origin
        MATCH path = (origin)-[*1..${depth}]-(reached)
-       WHERE reached.source = 'kg-build'
+       WHERE reached.source = 'kg-build'${gsReached}
        RETURN reached AS n
        UNION
        WITH origin RETURN origin AS n
      }
      WITH n ORDER BY labels(n)[0], coalesce(n.uri, n.iri) LIMIT $limit
      ${NODE_PROJECTION}`,
-    { nodeId, limit },
+    { nodeId, limit, ...(opts.graphSourceId ? { gs: opts.graphSourceId } : {}) },
     { limit }
   );
 

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { evaluate } from "@/lib/evaluator";
+import { authorizeTransition } from "@/lib/approvals";
 import { logAudit, store } from "@/lib/store";
 import {
   controlStore,
@@ -17,9 +18,20 @@ import {
   isNeo4jError,
 } from "@/lib/graph/neo4j";
 import { buildCypher } from "@/lib/graph/cypher";
+import { planSparql, runSparql } from "@/lib/graph/sparql";
+import { validateOutboundUrl } from "@/lib/graph/logic";
 import { GraphControlConfigError } from "@/lib/graph/factory";
 import type { RegisterInput } from "@/lib/graph/service";
-import type { GraphSource, MappingVersion, Neo4jBackend } from "@/lib/graph/entities";
+import type {
+  GraphSource,
+  MappingVersion,
+  Neo4jBackend,
+  NeptuneBackend,
+} from "@/lib/graph/entities";
+
+// Shown when a console user queries a Neptune source without writing SPARQL.
+const DEFAULT_SPARQL_INVENTORY =
+  "SELECT ?class (COUNT(?s) AS ?instances) WHERE { ?s a ?class } GROUP BY ?class ORDER BY ?class";
 import type { RecordStatus } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -35,6 +47,8 @@ type QueryBody = {
   preview?: boolean;
   /** Optional explicit read-only Cypher (neo4j backends only). */
   cypher?: string;
+  /** Optional read-only SPARQL SELECT/ASK (neptune backends only). */
+  sparql?: string;
 };
 type Body = RegisterBody | QueryBody;
 
@@ -280,6 +294,52 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // ----------------------------------------------------------------------- //
+  // Neptune backend: SPARQL scoped to the source's own named graphs. Policy
+  // has already been evaluated and allowed above.
+  // ----------------------------------------------------------------------- //
+  if (source.backend.type === "neptune") {
+    const neptune = source.backend as NeptuneBackend;
+    const configured =
+      Boolean(source.allowedHosts?.length) &&
+      validateOutboundUrl(neptune.endpoint, source.allowedHosts).ok;
+    let plan;
+    try {
+      plan = planSparql(body.sparql?.trim() || DEFAULT_SPARQL_INVENTORY, neptune.namedGraphs ?? [], limit);
+    } catch (e) {
+      return NextResponse.json({ error: (e as Error).message, code: "UNSAFE_QUERY" }, { status: 400 });
+    }
+    if (body.preview) {
+      logAudit({ category: "graph", action: "preview-query", actor,
+        detail: `ALLOW SPARQL routing preview for '${source.graphSourceId}'` });
+      return NextResponse.json({
+        mode: "preview", backend: "neptune", graphSourceId: source.graphSourceId,
+        targetConfigured: configured, target: neptune.endpoint, sparql: plan.query, decision,
+        message: "Policy passed. Query scoped to this source's named graphs; preview stopped before Neptune.",
+      });
+    }
+    if (!configured) {
+      return NextResponse.json(
+        { error: "This Neptune Graph Source has a placeholder or non-allowlisted endpoint." },
+        { status: 503 }
+      );
+    }
+    try {
+      const result = await runSparql(neptune, plan, { limit, timeoutMs: 25_000 });
+      logAudit({ category: "graph", action: "query", actor,
+        detail: `ALLOW SPARQL query to '${source.graphSourceId}' (${result.rowCount} rows)` });
+      return NextResponse.json({
+        mode: "live", backend: "neptune", graphSourceId: source.graphSourceId,
+        decision, sparql: plan.query, result,
+      });
+    } catch (error) {
+      const message = (error as Error).message || "Neptune query failed";
+      logAudit({ category: "graph", action: "query-error", actor,
+        detail: `SPARQL query failed for '${source.graphSourceId}': ${message}` });
+      return NextResponse.json({ error: message }, { status: 502 });
+    }
+  }
+
   if (body.preview) {
     logAudit({
       category: "graph",
@@ -369,6 +429,9 @@ export async function PATCH(req: NextRequest) {
   const body = (await req.json()) as {
     graphSourceId?: string;
     status?: RecordStatus;
+    personaId?: string;
+    reviewerPersonaId?: string;
+    submitterPersonaId?: string;
   };
   if (!body.graphSourceId || !body.status) {
     return NextResponse.json({ error: "graphSourceId and status are required" }, { status: 400 });
@@ -379,12 +442,34 @@ export async function PATCH(req: NextRequest) {
     if (!previous) {
       return NextResponse.json({ error: "graph source not found" }, { status: 404 });
     }
-    const updated = await transitionSource(body.graphSourceId, body.status);
+    // Maker-checker: see lib/approvals.ts.
+    const who = authorizeTransition({
+      next: body.status,
+      tenantId: previous.tenantId ?? previous.bu,
+      resourceId: previous.graphSourceId,
+      submittedByPersonaId: previous.submittedByPersonaId,
+      personaId: body.reviewerPersonaId ?? body.submitterPersonaId ?? body.personaId,
+    });
+    if (!who.ok) {
+      logAudit({ category: "graph", action: "update-status-denied",
+        actor: body.reviewerPersonaId ?? body.submitterPersonaId ?? body.personaId ?? "anonymous",
+        detail: `DENY Graph Source '${previous.displayName}': ${previous.status} → ${body.status}: ${who.error}` });
+      return NextResponse.json({ error: who.error, code: who.code }, { status: who.status });
+    }
+    const meta =
+      who.role === "submit" && who.persona
+        ? { submittedByPersonaId: who.persona.id }
+        : who.role === "decide" && who.persona
+          ? { decidedBy: who.persona.name, decidedByPersonaId: who.persona.id,
+              decidedAt: new Date().toISOString() }
+          : undefined;
+    const updated = await transitionSource(body.graphSourceId, body.status, meta);
     logAudit({
       category: "graph",
       action: "update-status",
-      actor: "workshop-administrator",
-      detail: `Graph Source '${updated.displayName}': ${previous.status} → ${updated.status}`,
+      actor: who.persona?.name ?? "console-user",
+      detail: `Graph Source '${updated.displayName}': ${previous.status} → ${updated.status}` +
+        (who.persona ? ` by ${who.persona.name} (${who.persona.id})` : ""),
     });
     return NextResponse.json(updated);
   } catch (e) {

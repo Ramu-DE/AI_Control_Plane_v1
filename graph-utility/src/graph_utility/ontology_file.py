@@ -192,6 +192,35 @@ class RdfFileOntologyClient:
             return english[0]
         return sorted(str(o) for o in labels)[0]
 
+    def _synonyms(self, subj) -> list[str]:
+        """skos:prefLabel / altLabel / hiddenLabel — the ontology owner's own
+        vocabulary for a term. Curated, versioned evidence for matching, unlike
+        a guessed resemblance. Sorted so proposals are deterministic."""
+        from rdflib import Namespace
+
+        skos = Namespace("http://www.w3.org/2004/02/skos/core#")
+        g = self.graph()
+        found = {
+            str(o)
+            for pred in (skos.prefLabel, skos.altLabel, skos.hiddenLabel)
+            for o in g.objects(subj, pred)
+        }
+        return sorted(found)
+
+    def _has_key(self, subj) -> list[str]:
+        """owl:hasKey (p1 p2 ...) — the ontology owner's declaration of which
+        properties identify an instance. Returned in declared order, because a
+        subject IRI embeds key order. Blank-node members are skipped (an
+        anonymous property cannot be matched to a column)."""
+        from rdflib import OWL
+        from rdflib.collection import Collection
+
+        g = self.graph()
+        for head in g.objects(subj, OWL.hasKey):
+            members = [self._uri(m) for m in Collection(g, head)]
+            return [m for m in members if m]
+        return []
+
     def _comment(self, subj) -> Optional[str]:
         from rdflib import RDFS
 
@@ -251,6 +280,8 @@ class RdfFileOntologyClient:
                     "class": uri,
                     "label": self._label(URIRef(uri)),
                     "comment": self._comment(URIRef(uri)),
+                    "synonyms": self._synonyms(URIRef(uri)),
+                    "has_key": self._has_key(URIRef(uri)),
                 }
         return [rows[k] for k in sorted(rows)]
 
@@ -273,6 +304,7 @@ class RdfFileOntologyClient:
         def emit(uri: str, ptype: str) -> None:
             subj = URIRef(uri)
             label = self._label(subj)
+            synonyms = self._synonyms(subj)
             domains = self._endpoints(subj, RDFS.domain, "domain", uri)
             ranges = self._endpoints(subj, RDFS.range, "range", uri)
             for d in domains:
@@ -280,6 +312,7 @@ class RdfFileOntologyClient:
                     out.append({
                         "property": uri,
                         "label": label,
+                        "synonyms": synonyms,
                         "domain": d,
                         "range": r,
                         "ptype": ptype,
@@ -331,11 +364,13 @@ class RdfFileOntologyClient:
                 continue
             subj = URIRef(uri)
             label = self._label(subj)
+            synonyms = self._synonyms(subj)
             for d in self._endpoints(subj, RDFS.domain, "domain", uri):
                 for r in self._endpoints(subj, RDFS.range, "range", uri):
                     out.append({
                         "property": uri,
                         "label": label,
+                        "synonyms": synonyms,
                         "domain": d,
                         "range": r,
                     })

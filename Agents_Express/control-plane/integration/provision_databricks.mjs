@@ -21,6 +21,12 @@
 
 import assert from "node:assert";
 
+// Maker-checker: a named submitter, and a DIFFERENT approver (lib/approvals.ts).
+const SUBMITTER = process.env.SUBMITTER_PERSONA_ID || "persona-john";
+const REVIEWER = process.env.REVIEWER_PERSONA_ID || "persona-mary";
+const actorFor = (status) =>
+  status === "Pending approval" ? { submitterPersonaId: SUBMITTER } : { reviewerPersonaId: REVIEWER };
+
 const BASE = (process.env.CONTROL_PLANE_URL || "http://localhost:3000/proxy/3000").replace(/\/+$/, "");
 const TENANT = process.env.DBX_TENANT || "fn-supply";
 
@@ -106,7 +112,7 @@ async function main() {
     const id = created.body.id;
     // Draft -> Pending approval -> Approved
     for (const status of ["Pending approval", "Approved"]) {
-      const t = await api("/api/registry", { method: "PATCH", body: JSON.stringify({ id, status }) });
+      const t = await api("/api/registry", { method: "PATCH", body: JSON.stringify({ id, status, ...actorFor(status) }) });
       if (t.status !== 200) break; // already further along
     }
     console.log(`record        : ${name} -> Approved`);

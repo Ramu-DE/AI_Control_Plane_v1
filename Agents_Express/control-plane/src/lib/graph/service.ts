@@ -29,7 +29,7 @@ import {
   normalizeProposal,
   validateOutboundUrl,
 } from "./logic";
-import type { GraphControlStore } from "./store";
+import type { ApprovalMeta, GraphControlStore } from "./store";
 import type { RecordStatus } from "../types";
 
 export function newId(prefix: string): string {
@@ -164,8 +164,21 @@ export function validateRegistration(input: RegisterInput): string | null {
     if (!input.backend.universalJoinKey?.trim()) {
       return "backend universalJoinKey is required for type 'databricks-uc'";
     }
+  } else if (input.backend?.type === "neptune") {
+    const endpoint = input.backend.endpoint?.trim();
+    if (!endpoint) return "backend endpoint is required for type 'neptune'";
+    if (!input.allowedHosts || input.allowedHosts.length === 0) {
+      return "a neptune endpoint must be pinned by allowedHosts";
+    }
+    const r = validateOutboundUrl(endpoint, input.allowedHosts);
+    if (!r.ok) return `backend endpoint rejected: ${r.reason}`;
+    const graphs = input.backend.namedGraphs ?? [];
+    if (graphs.length === 0) return "backend namedGraphs is required for type 'neptune'";
+    if (graphs.some((g) => !/^urn:kg:build:[A-Za-z0-9._:-]+$/.test(g))) {
+      return "backend namedGraphs must be graph-utility build graphs (urn:kg:build:...)";
+    }
   } else {
-    return "backend.type must be 'databricks-uc' or 'neo4j'";
+    return "backend.type must be 'databricks-uc', 'neo4j' or 'neptune'";
   }
 
   if (!input.llmEndpoint?.trim()) {
@@ -229,12 +242,13 @@ export async function registerGraphSource(
 
 export async function transitionSource(
   graphSourceId: string,
-  next: RecordStatus
+  next: RecordStatus,
+  meta?: ApprovalMeta
 ): Promise<GraphSource> {
   const store = await controlStore();
   const current = await store.getGraphSource(graphSourceId);
   if (!current) throw new NotFoundError(`graph source '${graphSourceId}' not found`);
-  return store.transitionGraphSource(graphSourceId, next, current.rev ?? 1);
+  return store.transitionGraphSource(graphSourceId, next, current.rev ?? 1, meta);
 }
 
 // --------------------------------------------------------------------------- //
@@ -450,3 +464,25 @@ export async function publishMappingVersion(
 }
 
 export { InvalidTransitionError, NotFoundError, PublishGateError, VersionConflictError };
+
+/** Replace a source's backend (e.g. point a Neptune source at its newest build's graphs). */
+export async function updateGraphSourceBackend(
+  graphSourceId: string,
+  backend: GraphSource["backend"]
+): Promise<GraphSource> {
+  const store = await controlStore();
+  const current = await store.getGraphSource(graphSourceId);
+  if (!current) throw new NotFoundError(`graph source '${graphSourceId}' not found`);
+  return store.updateGraphSource(graphSourceId, { backend }, current.rev ?? 1);
+}
+
+/** Set a source's build spec (validated by the caller). */
+export async function setGraphSourceKgSpec(
+  graphSourceId: string,
+  kgSpec: GraphSource["kgSpec"]
+): Promise<GraphSource> {
+  const store = await controlStore();
+  const current = await store.getGraphSource(graphSourceId);
+  if (!current) throw new NotFoundError(`graph source '${graphSourceId}' not found`);
+  return store.updateGraphSource(graphSourceId, { kgSpec }, current.rev ?? 1);
+}

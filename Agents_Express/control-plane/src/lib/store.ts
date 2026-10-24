@@ -33,6 +33,9 @@ import type {
 } from "./types";
 import { normalizeAgentCompute } from "./runtimes";
 import { recoverInterruptedRuns } from "./workflow/recover";
+import { upgradePersonas } from "./personas";
+import { upgradeRegulatoryPolicies } from "./regulatory";
+import { upgradeTenantRegulatory } from "./tenancy";
 import {
   SCHEMA_VERSION,
   capLog,
@@ -1085,7 +1088,13 @@ const MAX_AUDIT_ENTRIES = Number(process.env.CONTROL_PLANE_MAX_AUDIT || 5000);
 
 function bootStore(): { state: Store; note: string } {
   const loaded = loadSnapshot<Store>();
-  if (!loaded.state) return { state: seed(), note: loaded.reason };
+  if (!loaded.state) {
+    const state = seed();
+    upgradePersonas(state.personas);
+    upgradeTenantRegulatory(state.tenants);
+    upgradeRegulatoryPolicies(state.policies, iso(0));
+    return { state, note: loaded.reason };
+  }
   // A snapshot that parsed but is missing a collection this build expects
   // would throw on first access somewhere far away. Fill gaps from the seed
   // rather than trusting an under-specified file.
@@ -1098,9 +1107,16 @@ function bootStore(): { state: Store; note: string } {
       restored.push(key);
     }
   }
-  const note = restored.length
+  // Personas predating tenant memberships: see upgradePersonas.
+  const personaChanges = [
+    ...upgradePersonas(merged.personas),
+    ...upgradeTenantRegulatory(merged.tenants),
+    ...upgradeRegulatoryPolicies(merged.policies, iso(0)),
+  ];
+  let note = restored.length
     ? `${loaded.reason}; re-seeded missing collection(s): ${restored.join(", ")}`
     : loaded.reason;
+  if (personaChanges.length) note += `; personas: ${personaChanges.join(", ")}`;
   return { state: merged, note };
 }
 

@@ -145,6 +145,9 @@ export async function POST(req: NextRequest) {
     tool: body.tool,
     resource: body.resource,
     amount: body.amount,
+    // Optional: simulate a request acting WITHIN a tenant, so membership,
+    // role minimums and the GxP / residency policies can be tried here too.
+    ...(body.tenantId ? { tenantId: body.tenantId } : {}),
   });
 
   // Enrich decisions with the human-readable determining-policy name.
