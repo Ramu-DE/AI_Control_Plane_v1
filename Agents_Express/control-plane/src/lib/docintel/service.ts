@@ -51,8 +51,13 @@ export const ALLOWED_TYPES: Record<string, string> = {
   xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   txt: "text/plain",
 };
-/** Methods offered by default: ones that need no extra AWS setup (BDA profiles, Guardrails). */
-export const DEFAULT_METHODS = ["claude-haiku", "claude-sonnet", "nova-lite", "textract-claude-haiku"];
+/**
+ * Methods run when the caller names none: ones that need no extra AWS setup
+ * (BDA profiles, Guardrails) and accept multi-page PDFs. Textract-based
+ * methods use Textract's synchronous API (single page, 5 MB) unless IDP has an
+ * S3 bucket, so they stay opt-in.
+ */
+export const DEFAULT_METHODS = ["claude-haiku", "claude-sonnet", "nova-lite"];
 export const DEFAULT_CAPABILITIES = [
   "text_extraction", "kv_extraction", "table_extraction", "document_classification", "pii_detection",
 ];

@@ -77,6 +77,11 @@ interface FinalizedRecord {
 const ALL_METHODS = [
   "claude-haiku", "claude-sonnet", "nova-lite", "nova-pro", "textract-claude-haiku", "textract-claude-sonnet",
 ];
+/** Shown next to methods with input limits in this deployment. */
+const METHOD_NOTES: Record<string, string> = {
+  "textract-claude-haiku": "single-page PDF or image ≤ 5 MB",
+  "textract-claude-sonnet": "single-page PDF or image ≤ 5 MB",
+};
 const ALL_CAPABILITIES = [
   "text_extraction", "kv_extraction", "table_extraction", "document_classification", "pii_detection",
   "pii_redaction", "entity_extraction", "document_summarization", "invoice_processing", "contract_analysis",
@@ -142,8 +147,12 @@ export default function DocumentsPage() {
   // Keep the review editor in step with the selected job.
   useEffect(() => {
     setDraft(job?.review ? structuredClone(job.review) : null);
-    setFinalized(null);
   }, [selectedId, job?.updatedAt]);
+  // The finalized view belongs to the document, not to its last refresh: a
+  // refresh right after Finalize must not hide what was just produced.
+  useEffect(() => {
+    setFinalized(null);
+  }, [selectedId]);
 
   // Poll while extraction runs.
   useEffect(() => {
@@ -170,13 +179,25 @@ export default function DocumentsPage() {
   async function upload() {
     if (!file) return;
     await act("upload", async () => {
+      const max = health?.limits.maxUploadBytes ?? 25 * 1024 * 1024;
+      if (file.size > max) {
+        throw new Error(`${file.name} is ${(file.size / 1024 / 1024).toFixed(1)} MB; the limit is ${max / 1024 / 1024} MB`);
+      }
       const form = new FormData();
       form.append("file", file);
       form.append("tenantId", tenantId);
       form.append("personaId", personaId);
       const res = await fetch(withBase("/api/docintel"), { method: "POST", body: form });
-      const body = await res.json();
-      if (!res.ok) throw new Error(body.error ?? `upload failed: ${res.status}`);
+      // A proxy in front of the app (e.g. nginx's 413) answers with HTML, not JSON.
+      const raw = await res.text();
+      let body: { job?: Job; error?: string } = {};
+      try {
+        body = JSON.parse(raw);
+      } catch {
+        const title = /<title>([^<]*)<\/title>/i.exec(raw)?.[1]?.trim();
+        throw new Error(`upload failed: HTTP ${res.status}${title ? ` (${title})` : ""}`);
+      }
+      if (!res.ok || !body.job) throw new Error(body.error ?? `upload failed: ${res.status}`);
       setSelectedId(body.job.documentId);
       setFile(null);
     });
@@ -280,6 +301,7 @@ export default function DocumentsPage() {
                           {ALL_METHODS.map((m) => (
                             <label key={m} className="flex items-center gap-1 text-xs">
                               <input type="checkbox" checked={methods.includes(m)} onChange={() => toggle(methods, setMethods, m)} /> {m}
+                              {METHOD_NOTES[m] && <span className="text-slate-400">({METHOD_NOTES[m]})</span>}
                             </label>
                           ))}
                         </div>
@@ -315,7 +337,7 @@ export default function DocumentsPage() {
                         {job.methodRuns.map((r) => (
                           <tr key={r.method} className="border-t">
                             <td className="py-1 font-mono text-xs">{r.method}</td>
-                            <td>{r.status === "complete" ? "complete" : <span className="text-red-700" title={r.error}>error</span>}</td>
+                            <td>{r.status === "complete" ? "complete" : <span className="text-red-700">error{r.error ? `: ${r.error.slice(0, 120)}` : ""}</span>}</td>
                             <td>{r.latencyMs !== null ? `${(r.latencyMs / 1000).toFixed(1)} s` : "—"}</td>
                             <td>{r.cost !== null ? `$${r.cost.toFixed(4)}` : "—"}</td>
                             <td>{r.confidence !== null ? r.confidence.toFixed(2) : "—"}</td>
